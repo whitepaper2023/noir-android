@@ -139,8 +139,10 @@ object Scanner {
                         systemProtected = pkg in protectedPkgs
                     )
                 )
-            } catch (e: Exception) {
-                // 单个应用失败不中断整轮扫描
+            } catch (e: Throwable) {
+                // 单个应用失败不中断整轮扫描。1.0.4：改抓 Throwable——
+                // OutOfMemoryError 这类 Error 不进 catch (Exception)，一个大 dex
+                // 就能崩掉整轮扫描（旧版本也崩过）；现在单个应用出任何问题都只跳过它。
             }
             onProgress(index + 1, total, pkg)
         }
@@ -163,15 +165,33 @@ object Scanner {
                         val e = entries.nextElement()
                         if (!e.name.startsWith("classes") || !e.name.endsWith(".dex")) continue
                         if (e.size <= 0 || e.size > 64L * 1024 * 1024) continue
-                        val bytes = zip.getInputStream(e).use { it.readBytes() }
-                        // dex 里的字符串是 ASCII/UTF-8，用 Latin-1 解码可直接搜关键字。
-                        val text = String(bytes, Charsets.ISO_8859_1)
-                        for ((keyword, label) in DEEP_KEYWORDS) {
-                            if (text.contains(keyword)) hits.add(label)
+                        // 1.0.4：流式读 dex，不再 readBytes() 整文件 + 转 String 复制一份。
+                        // 一个大 dex 两份几十 MB 的拷贝是闪退的头号嫌疑（OutOfMemoryError，
+                        // Error 不进 catch (Exception)，直接崩掉整轮扫描）。
+                        // 每块 64KB，块之间留 64 字节重叠（最长的关键字 27 字符），
+                        // 跨块的关键字也能命中，内存峰值 64KB 出头。
+                        zip.getInputStream(e).use { input ->
+                            val buf = ByteArray(64 * 1024)
+                            var tail = ByteArray(0)
+                            while (hits.size < DEEP_KEYWORDS.size) {
+                                val n = input.read(buf)
+                                if (n <= 0) break
+                                val window = tail + buf.copyOf(n)
+                                // dex 里的字符串是 ASCII/UTF-8，用 Latin-1 解码可直接搜关键字。
+                                val text = String(window, Charsets.ISO_8859_1)
+                                for ((keyword, label) in DEEP_KEYWORDS) {
+                                    if (text.contains(keyword)) hits.add(label)
+                                }
+                                tail = if (window.size > 64) {
+                                    window.copyOfRange(window.size - 64, window.size)
+                                } else {
+                                    window
+                                }
+                            }
                         }
                     }
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 // 读不到就跳过，不报错
             }
             if (hits.size >= DEEP_KEYWORDS.size) break

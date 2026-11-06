@@ -42,7 +42,8 @@ object ApplyEngine {
     }
 
     /**
-     * 执行安全处置。执行前先逐条查当前模式并写入 rollback.txt，
+     * 执行安全处置。执行前先逐条查当前模式并写入 rollback.txt（追加，
+     * 不覆盖已有回滚行；同一 (pkg, op) 只保留最早那条），
      * 成功执行的动作才进 applied.txt；失败的也如实记录 stderr。
      */
     suspend fun applySafe(
@@ -52,6 +53,17 @@ object ApplyEngine {
         val dir = outDir(context)
         val rollback = File(dir, "rollback.txt")
         val applied = File(dir, "applied.txt")
+        // 1.0.4：记下文件里已有的 (pkg, op) 回滚行。最早那条恢复的是最初状态；
+        // 同一处置跑第二遍时查到的“原模式”已是第一遍改完的状态，再写一条反而会把
+        // 恢复目标写错（恢复完还停在 ignore），所以已有的不再重复写。
+        val coveredOps = if (rollback.exists()) {
+            Regex("""cmd appops set --user 0 (\S+) (\S+)""")
+                .findAll(rollback.readText())
+                .map { it.groupValues[1] to it.groupValues[2] }
+                .toSet()
+        } else {
+            emptySet()
+        }
         val rollbackLines = ArrayList<String>()
         val results = ArrayList<AppliedAction>()
         val planned = recommendations
@@ -70,20 +82,30 @@ object ApplyEngine {
                 "cmd appops get --user 0 ${rec.pkg} $op"
             )
             val prev = parseAppOpsMode(get.stdout)
-            rollbackLines.add(
-                "# ${rec.pkg} $op was: $prev (get exit=${get.exitCode})"
-            )
-            rollbackLines.add(
-                "cmd appops set --user 0 ${rec.pkg} $op $prev"
-            )
-            rollbackLines.add(
-                "# apply: $cmd"
-            )
+            if ((rec.pkg to op) !in coveredOps) {
+                rollbackLines.add(
+                    "# ${rec.pkg} $op was: $prev (get exit=${get.exitCode})"
+                )
+                rollbackLines.add(
+                    "cmd appops set --user 0 ${rec.pkg} $op $prev"
+                )
+                rollbackLines.add(
+                    "# apply: $cmd"
+                )
+            }
         }
-        rollback.writeText(
-            if (rollbackLines.isEmpty()) "# no appops changes were applied\n"
-            else rollbackLines.joinToString("\n") + "\n"
-        )
+        // 1.0.4：rollback.txt 改追加，不再覆盖。卸载/停用本来就是追加的，
+        // 只有这里是覆盖——跑一次安全处置就会把之前卸载/停用的恢复命令冲掉。
+        if (rollbackLines.isNotEmpty()) {
+            val existing = if (rollback.exists()) rollback.readText() else ""
+            rollback.writeText(
+                existing +
+                    (if (existing.isEmpty() || existing.endsWith("\n")) "" else "\n") +
+                    rollbackLines.joinToString("\n") + "\n"
+            )
+        } else if (!rollback.exists()) {
+            rollback.writeText("# no appops changes were applied\n")
+        }
 
         val appliedLines = ArrayList<String>()
         for ((rec, pair) in planned) {

@@ -49,8 +49,14 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+    companion object {
+        // 崩溃日志只装一次：Activity 重建时 onCreate 会再跑，别把 handler 链成自己套自己。
+        private var crashHandlerInstalled = false
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        installCrashHandler()
         setContentView(R.layout.activity_main)
         statusText = findViewById(R.id.statusText)
         summaryText = findViewById(R.id.summaryText)
@@ -66,6 +72,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.shizukuButton).setOnClickListener { checkShizuku() }
         findViewById<Button>(R.id.exportButton).setOnClickListener { exportReport() }
         findViewById<Button>(R.id.applyButton).setOnClickListener { confirmSafeApply() }
+        findViewById<Button>(R.id.restoreButton).setOnClickListener { confirmRestore() }
         findViewById<EditText>(R.id.searchBox).addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
@@ -134,7 +141,8 @@ class MainActivity : AppCompatActivity() {
                     "上报域名 ${result.domains.trackers.size} 个可拦截"
                 statusText.text = "扫描完成。点应用看详情；没装 Shizuku 也能扫和导出，" +
                     "处置要 Shizuku。\n" + ShizukuShell.status(this@MainActivity)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                logScanError(e)
                 statusText.text = "扫描失败：${e.message}"
             } finally {
                 progressBar.visibility = View.GONE
@@ -519,6 +527,108 @@ class MainActivity : AppCompatActivity() {
                                 "执行记录：${rollback.parent}/applied.txt\n\n" +
                                 applied.joinToString("\n") {
                                     "${it.command} → exit=${it.exitCode}"
+                                }
+                        )
+                        .setPositiveButton("好", null)
+                        .show()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    // 1.0.4：闪退诊断。扫描在旧版本上也崩过（Lu 2026-11-07 反馈），崩溃时把堆栈
+    // 写进 noir-out/crash.txt 再交给系统默认处理，下次再崩就能从文件里看到原因，
+    // 不用靠猜。handler 里再出问题也不许抛（用 Throwable 接），否则会循环崩。
+    private fun installCrashHandler() {
+        if (crashHandlerInstalled) return
+        crashHandlerInstalled = true
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                val dir = ApplyEngine.outDir(this)
+                val f = java.io.File(dir, "crash.txt")
+                val sw = java.io.StringWriter()
+                throwable.printStackTrace(java.io.PrintWriter(sw))
+                f.appendText("=== ${java.util.Date()} thread=${thread.name} $throwable\n$sw\n")
+            } catch (_: Throwable) {
+            }
+            previous?.uncaughtException(thread, throwable)
+        }
+    }
+
+    // 1.0.4：扫描失败也留一份记录（noir-out/scan-error.txt），不用等崩溃才知道原因。
+    private fun logScanError(e: Throwable) {
+        try {
+            val dir = ApplyEngine.outDir(this)
+            val f = java.io.File(dir, "scan-error.txt")
+            val sw = java.io.StringWriter()
+            e.printStackTrace(java.io.PrintWriter(sw))
+            f.appendText("=== ${java.util.Date()} $e\n$sw\n")
+        } catch (_: Throwable) {
+        }
+    }
+
+    // 1.0.4：恢复按钮。读 rollback.txt，把里面的命令（不含注释行）逐条经
+    // Shizuku 执行一遍，逐条报结果。恢复命令本身都是幂等的（appops 设回原模式、
+    // pm install-existing、pm enable），恢复完文件留着，再点一次也无害。
+    // 恢复后列表可能过时（比如刚启用的应用仍标“已停用”），提示重扫。
+    private fun confirmRestore() {
+        val dir = ApplyEngine.outDir(this)
+        val rollback = java.io.File(dir, "rollback.txt")
+        if (!rollback.exists()) {
+            Toast.makeText(this, "没有可恢复的内容：还没产生过 rollback.txt", Toast.LENGTH_LONG).show()
+            return
+        }
+        val commands = rollback.readLines()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("#") }
+        if (commands.isEmpty()) {
+            Toast.makeText(this, "rollback.txt 里没有可执行的恢复命令", Toast.LENGTH_LONG).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("恢复 ${commands.size} 条？")
+            .setMessage(
+                "将按顺序执行 rollback.txt 里的恢复命令（appops 设回原模式、重装已卸载的应用、重新启用已停用的应用）：\n\n" +
+                    commands.joinToString("\n") +
+                    "\n\n恢复完文件会留着，想再恢复一次也可以。恢复后建议重新扫描一次刷新列表。"
+            )
+            .setPositiveButton("恢复") { _, _ ->
+                scope.launch {
+                    statusText.text = "正在恢复 ${commands.size} 条（通过 Shizuku）…"
+                    val ok = ShizukuShell.ensurePermission { ShizukuShell.requestPermission() }
+                    if (!ok) {
+                        statusText.text = "需要 Shizuku 授权：点“检查 SHIZUKU”授权后再试。"
+                        Toast.makeText(this@MainActivity, "需要 Shizuku 授权", Toast.LENGTH_LONG).show()
+                        return@launch
+                    }
+                    val results = withContext(Dispatchers.IO) {
+                        commands.map { cmd ->
+                            val r = ShizukuShell.runCommand(this@MainActivity, cmd)
+                            Triple(cmd, r.exitCode, "${r.stdout}\n${r.stderr}".trim())
+                        }
+                    }
+                    val done = results.count { it.second == 0 }
+                    // 成功启用过的应用，就地把“已停用”标记去掉，不用重扫。
+                    val reEnabled = results.filter {
+                        it.second == 0 && it.first.startsWith("pm enable --user 0 ")
+                    }.map { it.first.removePrefix("pm enable --user 0 ").trim() }.toSet()
+                    if (reEnabled.isNotEmpty()) {
+                        allApps = allApps.map {
+                            if (it.entry.pkg in reEnabled) it.copy(disabled = false) else it
+                        }
+                        lastResult = lastResult?.copy(apps = allApps)
+                        val query = findViewById<EditText>(R.id.searchBox).text.toString()
+                        applyFilter(query)
+                    }
+                    statusText.text = "恢复完成：$done/${results.size} 成功。建议重新扫描一次刷新列表。"
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("恢复完成：$done/${results.size} 成功")
+                        .setMessage(
+                            "回滚文件：${rollback.absolutePath}\n\n" +
+                                results.joinToString("\n\n") {
+                                    "${it.first} → exit=${it.second}\n${it.third}"
                                 }
                         )
                         .setPositiveButton("好", null)
