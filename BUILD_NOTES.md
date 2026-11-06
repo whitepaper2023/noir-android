@@ -52,4 +52,12 @@
   远程进程上不可靠（独立复核指出并修过）。
   注意：官方文档说 newProcess 已废弃、计划在 API 14 移除，但我们钉死 13.1.5、服务端 13.6.0 仍实现它；
   若以后升 API 14 须重新评估。
+- 停用/启用（2026-11-06 23:10 真机反馈，Lu 要求加按钮）：vivo 受保护系统应用（如孩子守护组件）
+  用 pm uninstall 会弹“安全验证”要求登录 vivo 账号，这是 vivo 系统包管理器的拦截，执行路径换不成。
+  替代办法是停用：详情弹窗加“停用此应用（需 Shizuku）”按钮，执行 pm disable-user --user 0，
+  停用后复核用 pm list packages -d --user 0 查已停用列表；已停用的显示“启用此应用”按钮，
+  执行 pm enable --user 0，复核是包不再出现在已停用列表里。停用恢复命令（pm enable）写进
+  rollback.txt。三个按钮竖排、全宽固定在弹窗底部；扫描时按 ApplicationInfo.enabled 记停用
+  标记，列表行与详情都显示“已停用”，停用/启用后就地更新标记不用重扫。受保护包
+  （android / com.lu.noir / moe.shizuku.manager）既不能卸载也不能停用。
 - 版本：versionCode 3，versionName 1.0.2。签名仍用同一把 release.keystore（别名 clashfirewall）。
