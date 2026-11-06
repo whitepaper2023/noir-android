@@ -1,0 +1,35 @@
+name: Build NOIR Release
+on:
+  workflow_dispatch:
+
+jobs:
+  BuildNoirRelease:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: "temurin"
+          java-version: 21
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      # No signing config in the app module: this produces UNSIGNED release
+      # APKs. Signing happens locally with a fixed release keystore (never
+      # uploaded to GitHub), so a release build upgrades over previous
+      # release builds without uninstalling.
+      - name: Build
+        if: success()
+        run: gradle --no-daemon app:assembleRelease
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v7
+        if: ${{ success() }}
+        with:
+          name: NOIR Release APK (unsigned)
+          path: |
+            app/build/outputs/apk/release/*.apk
