@@ -20,7 +20,6 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -30,7 +29,8 @@ import rikka.shizuku.Shizuku
 class MainActivity : AppCompatActivity() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private var scanJob: Job? = null
+    // 1.0.6：本地镜像，供卸载/停用/处置/恢复等流程就地改列表；源头在 ScanManager，
+    // 每次改完都经 setLastResult 同步回去，Activity 重建后从 ScanManager 取。
     private var lastResult: ScanResult? = null
     private var allApps: List<ScannedApp> = emptyList()
     private var shownApps: List<ScannedApp> = emptyList()
@@ -82,11 +82,44 @@ class MainActivity : AppCompatActivity() {
         })
         Shizuku.addRequestPermissionResultListener(permissionListener)
         statusText.text = "NOIR：本机隐私审计，不联网、不上传。\n" + ShizukuShell.status(this)
+
+        // 1.0.6：扫描在 ScanManager 里跑，Activity 重建/重开时接回进度与结果。
+        ScanManager.onProgress = { done, total, pkg ->
+            // Scanner.scan 在 Dispatchers.Default 里跑，进度回调在后台线程，
+            // 直接碰 View 会抛 CalledFromWrongThreadException，必须发回主线程。
+            runOnUiThread {
+                progressBar.max = total
+                progressBar.progress = done
+                statusText.text = "正在扫描 $done/$total：$pkg"
+            }
+        }
+        ScanManager.onFinished = { result, error ->
+            progressBar.visibility = View.GONE
+            when {
+                result != null -> showScanResult(result)
+                error is kotlinx.coroutines.CancellationException -> statusText.text = "扫描已停止。"
+                error != null -> statusText.text = "扫描失败：${error.message}"
+            }
+        }
+        if (ScanManager.isRunning) {
+            progressBar.visibility = View.VISIBLE
+            progressBar.max = ScanManager.lastTotal
+            progressBar.progress = ScanManager.lastDone
+            statusText.text = "正在扫描 ${ScanManager.lastDone}/${ScanManager.lastTotal}：${ScanManager.lastPkg}"
+        } else if (ScanManager.lastError != null) {
+            // 扫一半回来发现已经失败了（失败原因已写进 scan-error.txt）。
+            statusText.text = "扫描失败：${ScanManager.lastError?.message}"
+        } else {
+            ScanManager.lastResult?.let { showScanResult(it) }
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         Shizuku.removeRequestPermissionResultListener(permissionListener)
+        // 1.0.6：只注销进度回调，扫描本身在 ScanManager 里跑，不受 Activity 销毁影响。
+        ScanManager.onProgress = null
+        ScanManager.onFinished = null
         scope.cancel()
     }
 
@@ -112,42 +145,28 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // 1.0.6：扫描在 ScanManager（应用级 scope）里跑，Activity 销毁不取消它；
+    // 已在扫时再点一次 = 用户主动停止。
     private fun startScan() {
-        if (scanJob?.isActive == true) {
-            scanJob?.cancel()
-            return
-        }
-        scanJob = scope.launch {
+        if (!ScanManager.isRunning) {
             progressBar.visibility = View.VISIBLE
             progressBar.progress = 0
             statusText.text = "正在扫描…"
-            try {
-                val result = Scanner.scan(this@MainActivity) { done, total, pkg ->
-                    // Scanner.scan 在 Dispatchers.Default 里跑，进度回调在后台线程，
-                    // 直接碰 View 会抛 CalledFromWrongThreadException，必须发回主线程。
-                    runOnUiThread {
-                        progressBar.max = total
-                        progressBar.progress = done
-                        statusText.text = "正在扫描 $done/$total：$pkg"
-                    }
-                }
-                lastResult = result
-                allApps = result.apps
-                applyFilter("")
-                val high = result.apps.count { it.entry.score >= 40 }
-                val med = result.apps.count { it.entry.score in 25..39 }
-                summaryText.text = "共 ${result.apps.size} 个应用，高风险 $high 个，中风险 $med 个，" +
-                    "安全处置 ${result.recommendations.count { it.autoSafe }} 条，" +
-                    "上报域名 ${result.domains.trackers.size} 个可拦截"
-                statusText.text = "扫描完成。点应用看详情；没装 Shizuku 也能扫和导出，" +
-                    "处置要 Shizuku。\n" + ShizukuShell.status(this@MainActivity)
-            } catch (e: Throwable) {
-                logScanError(e)
-                statusText.text = "扫描失败：${e.message}"
-            } finally {
-                progressBar.visibility = View.GONE
-            }
         }
+        ScanManager.toggleScan(this)
+    }
+
+    private fun showScanResult(result: ScanResult) {
+        lastResult = result
+        allApps = result.apps
+        applyFilter("")
+        val high = result.apps.count { it.entry.score >= 40 }
+        val med = result.apps.count { it.entry.score in 25..39 }
+        summaryText.text = "共 ${result.apps.size} 个应用，高风险 $high 个，中风险 $med 个，" +
+            "安全处置 ${result.recommendations.count { it.autoSafe }} 条，" +
+            "上报域名 ${result.domains.trackers.size} 个可拦截"
+        statusText.text = "扫描完成。点应用看详情；没装 Shizuku 也能扫和导出，" +
+            "处置要 Shizuku。\n" + ShizukuShell.status(this@MainActivity)
     }
 
     private fun applyFilter(query: String) {
@@ -292,6 +311,7 @@ class MainActivity : AppCompatActivity() {
                 if (it.entry.pkg == pkg) it.copy(systemProtected = true) else it
             }
             lastResult = lastResult?.copy(apps = allApps)
+            ScanManager.setLastResult(lastResult)
             val query = findViewById<EditText>(R.id.searchBox).text.toString()
             applyFilter(query)
         }
@@ -335,6 +355,7 @@ class MainActivity : AppCompatActivity() {
                     if (gone) {
                         allApps = allApps.filter { it.entry.pkg != pkg }
                         lastResult = lastResult?.copy(apps = allApps)
+                        ScanManager.setLastResult(lastResult)
                         val query = findViewById<EditText>(R.id.searchBox).text.toString()
                         applyFilter(query)
                         val high = allApps.count { it.entry.score >= 40 }
@@ -407,6 +428,7 @@ class MainActivity : AppCompatActivity() {
                             if (it.entry.pkg == pkg) it.copy(disabled = true) else it
                         }
                         lastResult = lastResult?.copy(apps = allApps)
+                        ScanManager.setLastResult(lastResult)
                         val query = findViewById<EditText>(R.id.searchBox).text.toString()
                         applyFilter(query)
                         statusText.text = "已停用 $pkg（仍在列表里，点详情可重新启用）。"
@@ -470,6 +492,7 @@ class MainActivity : AppCompatActivity() {
                             if (it.entry.pkg == pkg) it.copy(disabled = false) else it
                         }
                         lastResult = lastResult?.copy(apps = allApps)
+                        ScanManager.setLastResult(lastResult)
                         val query = findViewById<EditText>(R.id.searchBox).text.toString()
                         applyFilter(query)
                         statusText.text = "已启用 $pkg。"
@@ -557,18 +580,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 1.0.4：扫描失败也留一份记录（noir-out/scan-error.txt），不用等崩溃才知道原因。
-    private fun logScanError(e: Throwable) {
-        try {
-            val dir = ApplyEngine.outDir(this)
-            val f = java.io.File(dir, "scan-error.txt")
-            val sw = java.io.StringWriter()
-            e.printStackTrace(java.io.PrintWriter(sw))
-            f.appendText("=== ${java.util.Date()} $e\n$sw\n")
-        } catch (_: Throwable) {
-        }
-    }
-
     // 1.0.4：恢复按钮。读 rollback.txt，把里面的命令（不含注释行）逐条经
     // Shizuku 执行一遍，逐条报结果。恢复命令本身都是幂等的（appops 设回原模式、
     // pm install-existing、pm enable），恢复完文件留着，再点一次也无害。
@@ -619,6 +630,7 @@ class MainActivity : AppCompatActivity() {
                             if (it.entry.pkg in reEnabled) it.copy(disabled = false) else it
                         }
                         lastResult = lastResult?.copy(apps = allApps)
+                        ScanManager.setLastResult(lastResult)
                         val query = findViewById<EditText>(R.id.searchBox).text.toString()
                         applyFilter(query)
                     }
