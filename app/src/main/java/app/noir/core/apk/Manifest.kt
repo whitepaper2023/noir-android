@@ -88,7 +88,7 @@ object ManifestAnalyzer {
                 targetSdk = sdk?.attrs?.get("targetSdkVersion"),
                 networkSecurityConfig = application?.attrs?.get("networkSecurityConfig")?.isNotBlank() == true
             )
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             null
         }
     }
