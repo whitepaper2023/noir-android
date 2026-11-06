@@ -24,7 +24,10 @@ data class ScannedApp(
     val manifest: ManifestFacts?,
     val trackers: Set<String>,
     val deepHits: List<String>,
-    val apkPaths: List<String>
+    val apkPaths: List<String>,
+    // 1.0.2：是否已被停用（pm disable-user）。扫描时按 ApplicationInfo.enabled 取，
+    // 停用/启用操作后就地更新，不用重扫。
+    val disabled: Boolean = false
 )
 
 data class ScanResult(
@@ -125,7 +128,8 @@ object Scanner {
                         manifest = manifest,
                         trackers = Trackers.fromEndpoints(endpoints.toList()),
                         deepHits = deepHits,
-                        apkPaths = apkPaths
+                        apkPaths = apkPaths,
+                        disabled = !appInfo.enabled
                     )
                 )
             } catch (e: Exception) {

@@ -119,6 +119,31 @@ object ApplyEngine {
         return action
     }
 
+    /** 停用单个应用：pm disable-user，恢复命令是 pm enable，写进 rollback.txt。 */
+    suspend fun disableOne(context: Context, pkg: String): AppliedAction {
+        require(pkg !in PROTECTED) { "受保护的包不允许停用：$pkg" }
+        val dir = outDir(context)
+        val rollback = File(dir, "rollback.txt")
+        val cmd = "pm disable-user --user 0 $pkg"
+        val result = ShizukuShell.runCommand(context, cmd)
+        val action = AppliedAction(cmd, result.exitCode, result.stdout, result.stderr)
+        val existing = if (rollback.exists()) rollback.readText() else ""
+        rollback.writeText(
+            existing +
+                "# disable $pkg (exit=${result.exitCode})\n" +
+                "pm enable --user 0 $pkg\n"
+        )
+        return action
+    }
+
+    /** 重新启用单个应用。 */
+    suspend fun enableOne(context: Context, pkg: String): AppliedAction {
+        require(pkg !in PROTECTED) { "受保护的包不允许启用：$pkg" }
+        val cmd = "pm enable --user 0 $pkg"
+        val result = ShizukuShell.runCommand(context, cmd)
+        return AppliedAction(cmd, result.exitCode, result.stdout, result.stderr)
+    }
+
     private fun parseAppOpsMode(stdout: String): String {
         // `cmd appops get` 输出形如 "PROJECT_MEDIA: ignore" / "PROJECT_MEDIA: default"
         val afterColon = stdout.substringAfter(":", "").trim()

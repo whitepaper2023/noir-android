@@ -4,7 +4,6 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
-import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -160,7 +159,7 @@ class MainActivity : AppCompatActivity() {
         val sb = StringBuilder()
         sb.append("应用：${app.label}\n包名：${e.pkg}\n")
         sb.append("分数：${e.score}  分类：${e.category.label}  厂商：${e.vendor ?: "—"}\n")
-        sb.append("系统应用：${if (e.isSystem) "是" else "否"}  可调试：${if (e.debuggable) "是" else "否"}\n")
+        sb.append("系统应用：${if (e.isSystem) "是" else "否"}  可调试：${if (e.debuggable) "是" else "否"}  状态：${if (app.disabled) "已停用" else "启用中"}\n")
         sb.append("UID：${e.uid}  共享 UID：${e.sharedUid ?: "—"}  安装来源：${e.installer ?: "—"}\n\n")
         sb.append("可读数据：${e.dataTypes.joinToString("、") { it.label }.ifEmpty { "无" }}\n\n")
         sb.append("权限（${e.permissions.size}）：\n${e.permissions.joinToString("\n")}\n\n")
@@ -197,14 +196,35 @@ class MainActivity : AppCompatActivity() {
         // 1.0.1：按钮放进弹窗自己的布局里（内容区 weight=1，按钮行固定在底）。
         // 1.0.0 用 AlertDialog 的 neutral button，内容太长时按钮会被顶出屏幕
         // 底部、只剩半截看不见（真机实测）。
-        val closeButton = Button(this).apply { text = "关闭" }
-        val uninstallButton = Button(this).apply { text = "卸载此应用（需 Shizuku）" }
+        val closeButton = Button(this).apply {
+            text = "关闭"
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        val uninstallButton = Button(this).apply {
+            text = "卸载此应用（需 Shizuku）"
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        // 1.0.2：vivo 受保护系统应用卸载会弹账号验证，卸不掉；加停用按钮，
+        // 已停用的显示启用按钮。三个按钮竖排、全宽，始终可见。
+        val disableButton = Button(this).apply {
+            text = if (app.disabled) "启用此应用（需 Shizuku）" else "停用此应用（需 Shizuku）"
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
         val canUninstall = e.pkg !in setOf("android", "com.lu.noir", "moe.shizuku.manager")
         val buttonRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END
+            orientation = LinearLayout.VERTICAL
             addView(closeButton)
             if (canUninstall) addView(uninstallButton)
+            if (canUninstall) addView(disableButton)
         }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -230,6 +250,10 @@ class MainActivity : AppCompatActivity() {
         uninstallButton.setOnClickListener {
             dialog.dismiss()
             confirmUninstall(e.pkg)
+        }
+        disableButton.setOnClickListener {
+            dialog.dismiss()
+            if (app.disabled) confirmEnable(e.pkg) else confirmDisable(e.pkg)
         }
         dialog.show()
     }
@@ -286,6 +310,131 @@ class MainActivity : AppCompatActivity() {
                         .setTitle(if (gone) "卸载成功" else "卸载结果：exit=${result.exitCode}")
                         .setMessage(
                             "$verified\n\n卸载命令：pm uninstall --user 0 $pkg\n" +
+                                "stdout：\n${result.stdout}\n\nstderr：\n${result.stderr}"
+                        )
+                        .setPositiveButton("好", null)
+                        .show()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    // 1.0.2：停用是卸载的替代办法——vivo 受保护系统应用卸载会弹账号验证，
+    // 停用（pm disable-user）不触发验证，应用停运、不上报，可随时恢复。
+    private fun confirmDisable(pkg: String) {
+        AlertDialog.Builder(this)
+            .setTitle("停用 $pkg？")
+            .setMessage("将执行：pm disable-user --user 0 $pkg\n应用将停止运行、不再上报，桌面上也不见了；随时可以恢复，恢复命令会写进 rollback.txt：\npm enable --user 0 $pkg")
+            .setPositiveButton("停用") { _, _ ->
+                scope.launch {
+                    statusText.text = "正在停用 $pkg（通过 Shizuku）…"
+                    val ok = ShizukuShell.ensurePermission { ShizukuShell.requestPermission() }
+                    if (!ok) {
+                        statusText.text = "需要 Shizuku 授权：点“检查 SHIZUKU”授权后再试。"
+                        Toast.makeText(this@MainActivity, "需要 Shizuku 授权", Toast.LENGTH_LONG).show()
+                        return@launch
+                    }
+                    val result = withContext(Dispatchers.IO) {
+                        ApplyEngine.disableOne(this@MainActivity, pkg)
+                    }
+                    // 停用完立刻复核：包在不在用户 0 的已停用列表里。
+                    val verify = withContext(Dispatchers.IO) {
+                        ShizukuShell.runCommand(
+                            this@MainActivity,
+                            "pm list packages -d --user 0 $pkg"
+                        )
+                    }
+                    // 复核用整行匹配：pm 的包名过滤是子串匹配，同前缀的兄弟包
+                    // （如 com.vivo.familycare.widget 之于 com.vivo.familycare）会串进
+                    // 结果；只认 "package:<包名>" 整行才作数。另要求停用命令本身 exit=0，
+                    // 否则“已停用”可能是包本来就停着、这次命令根本没跑成。
+                    val disabled = result.exitCode == 0 && verify.exitCode == 0 &&
+                        verify.stdout.lineSequence().any { it.trim() == "package:$pkg" }
+                    val verified = when {
+                        verify.exitCode != 0 ->
+                            "复核失败（Shizuku 命令没跑通，exit=${verify.exitCode}）：请回 Shizuku App 看服务还在不在，再点“检查 SHIZUKU”。"
+                        disabled ->
+                            "复核：已停用，包在用户 0 的已停用列表里。"
+                        else ->
+                            "复核：未停用，包不在已停用列表里。请把 stdout/stderr 截图发我。"
+                    }
+                    if (disabled) {
+                        // 仍在列表里（只是停用），就地把条目标成已停用并刷新当前过滤。
+                        allApps = allApps.map {
+                            if (it.entry.pkg == pkg) it.copy(disabled = true) else it
+                        }
+                        lastResult = lastResult?.copy(apps = allApps)
+                        val query = findViewById<EditText>(R.id.searchBox).text.toString()
+                        applyFilter(query)
+                        statusText.text = "已停用 $pkg（仍在列表里，点详情可重新启用）。"
+                    } else {
+                        statusText.text = "停用未完成：$pkg 仍在运行，详见结果弹窗。"
+                    }
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle(if (disabled) "停用成功" else "停用结果：exit=${result.exitCode}")
+                        .setMessage(
+                            "$verified\n\n停用命令：pm disable-user --user 0 $pkg\n" +
+                                "stdout：\n${result.stdout}\n\nstderr：\n${result.stderr}"
+                        )
+                        .setPositiveButton("好", null)
+                        .show()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun confirmEnable(pkg: String) {
+        AlertDialog.Builder(this)
+            .setTitle("启用 $pkg？")
+            .setMessage("将执行：pm enable --user 0 $pkg\n应用恢复运行，桌面图标也会回来。")
+            .setPositiveButton("启用") { _, _ ->
+                scope.launch {
+                    statusText.text = "正在启用 $pkg（通过 Shizuku）…"
+                    val ok = ShizukuShell.ensurePermission { ShizukuShell.requestPermission() }
+                    if (!ok) {
+                        statusText.text = "需要 Shizuku 授权：点“检查 SHIZUKU”授权后再试。"
+                        Toast.makeText(this@MainActivity, "需要 Shizuku 授权", Toast.LENGTH_LONG).show()
+                        return@launch
+                    }
+                    val result = withContext(Dispatchers.IO) {
+                        ApplyEngine.enableOne(this@MainActivity, pkg)
+                    }
+                    // 启用完复核：包不应再出现在已停用列表里。
+                    val verify = withContext(Dispatchers.IO) {
+                        ShizukuShell.runCommand(
+                            this@MainActivity,
+                            "pm list packages -d --user 0 $pkg"
+                        )
+                    }
+                    // 同上：整行匹配 + 启用命令本身 exit=0。包不存在时 pm enable 失败、
+                    // -d 列表又为空，不加 exit=0 会把“启用失败”误判成“启用成功”。
+                    val enabled = result.exitCode == 0 && verify.exitCode == 0 &&
+                        verify.stdout.lineSequence().none { it.trim() == "package:$pkg" }
+                    val verified = when {
+                        verify.exitCode != 0 ->
+                            "复核失败（Shizuku 命令没跑通，exit=${verify.exitCode}）：请回 Shizuku App 看服务还在不在，再点“检查 SHIZUKU”。"
+                        enabled ->
+                            "复核：已启用，包不在已停用列表里。"
+                        else ->
+                            "复核：未启用，包还在已停用列表里。请把 stdout/stderr 截图发我。"
+                    }
+                    if (enabled) {
+                        allApps = allApps.map {
+                            if (it.entry.pkg == pkg) it.copy(disabled = false) else it
+                        }
+                        lastResult = lastResult?.copy(apps = allApps)
+                        val query = findViewById<EditText>(R.id.searchBox).text.toString()
+                        applyFilter(query)
+                        statusText.text = "已启用 $pkg。"
+                    } else {
+                        statusText.text = "启用未完成，详见结果弹窗。"
+                    }
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle(if (enabled) "启用成功" else "启用结果：exit=${result.exitCode}")
+                        .setMessage(
+                            "$verified\n\n启用命令：pm enable --user 0 $pkg\n" +
                                 "stdout：\n${result.stdout}\n\nstderr：\n${result.stderr}"
                         )
                         .setPositiveButton("好", null)
@@ -386,7 +535,8 @@ class MainActivity : AppCompatActivity() {
             val e = app.entry
             holder.title.text = "${app.label}（${e.pkg}）"
             holder.meta.text = "${e.category.label} · ${e.vendor ?: "—"} · " +
-                "${if (e.isSystem) "系统" else "用户"} · 权限 ${e.permissions.size} · 上报 ${e.uploadEndpoints.size}"
+                "${if (e.isSystem) "系统" else "用户"} · 权限 ${e.permissions.size} · 上报 ${e.uploadEndpoints.size}" +
+                if (app.disabled) " · 已停用" else ""
             holder.score.text = "风险分：${e.score}" +
                 if (e.score >= 40) "（高）" else if (e.score >= 25) "（中）" else "（低）"
             holder.itemView.setOnClickListener { onClick(app) }
