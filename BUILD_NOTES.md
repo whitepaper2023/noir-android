@@ -15,7 +15,7 @@
 - `.github/workflows/build-noir-release.yaml`：workflow_dispatch，CI 只出 unsigned 包，签名本地做。
 
 ## 自查（2026-11-06，本地无 Java/Android SDK，无法本地编译）
-- 全部.kt/.kts 大括号/圆括号/方括号成对，全部.xml 解析通过。
+- 全部 .kt/.kts 大括号/圆括号/方括号成对，全部 .xml 解析通过。
 - 逐文件重读：AIDL 方法与 Stub 实现一致（destroy/runCommand/whoami）；UserServiceArgs 链式调用与官方 demo 一致；ShizukuProvider 与 queries 已声明；R.id 与布局一致；Report/Classifier/Advisor/Domains API 签名与上游一致。
 - 无 keystore、无密码、无节点数据进仓库。
 - CI 是编译检查：若 CI 报错，按报错逐项修，不叠加未验证版本。
@@ -35,4 +35,21 @@
   确认已卸载后从列表里去掉该应用并更新统计，不用重新扫描。
 - 图标：黑底白盾 + 放大镜（PIL 生成），自适应图标（mipmap-anydpi-v26 + xxxhdpi 前景）
   与 legacy/round 各密度 PNG，manifest 已接 `android:icon` / `android:roundIcon`。
-- 版本：versionCode 2，versionName 1.0.1。签名仍用 Bash 那把 release.keystore（CLASHFIR）。
+- 版本：versionCode 2，versionName 1.0.1。签名仍用 Bash 那把 release.keystore（别名 clashfirewall，之前记的 CLASHFIR 是错的，keystore 里只有这一个条目）。
+
+## 1.0.2（2026-11-06，真机反馈）
+- 1.0.1 复测（23:00）：卸载仍失败，exit=-1，15 秒就报“绑定 Shizuku 服务超时”，不再等 60 秒；
+  详情弹窗按钮已修好（结果弹窗完整显示）。结论：UserService 绑定在 Lu 的 vivo 上始终不回，
+  预检 pingBinder/授权都通过、服务端活着，问题在绑定这一步本身，不是超时时间。
+- 改法：runCommand 先走 Shizuku.newProcess 直跑命令。13.1.5 里这个方法是 private static
+  （AAR 类文件核实：`newProcess([Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Lrikka/shizuku/ShizukuRemoteProcess;`，
+  返回的 ShizukuRemoteProcess 是 public 类、继承 java.lang.Process），用反射调它；
+  服务端直接 fork `sh -c <命令>` 执行，不用绑服务、不用另起应用进程，正好绕过卡住的一步。
+  反射不可用（NoSuchMethodException/SecurityException）时回落到原来的 UserService 绑定（15 秒超时）；
+  直跑中服务端抛错直接报 exit=-1，不再走绑定。两种路子命令本身都给 60 秒。
+  计时等待用 ShizukuRemoteProcess 自带的 waitForTimeout（服务端计时），不用基类
+  Process.waitFor(long, TimeUnit)——后者靠轮询 exitValue()、只认 IllegalThreadStateException，
+  远程进程上不可靠（独立复核指出并修过）。
+  注意：官方文档说 newProcess 已废弃、计划在 API 14 移除，但我们钉死 13.1.5、服务端 13.6.0 仍实现它；
+  若以后升 API 14 须重新评估。
+- 版本：versionCode 3，versionName 1.0.2。签名仍用同一把 release.keystore（别名 clashfirewall）。
