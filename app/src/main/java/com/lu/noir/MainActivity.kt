@@ -687,6 +687,16 @@ class MainActivity : AppCompatActivity() {
                 if (app.systemProtected) " · 受保护" else ""
             holder.score.text = "风险分：${e.score}" +
                 if (e.score >= 40) "（高）" else if (e.score >= 25) "（中）" else "（低）"
+            // 1.0.5：分数按风险着色，高红、中橙、低绿，一眼能分出来。
+            holder.score.setTextColor(
+                android.graphics.Color.parseColor(
+                    when {
+                        e.score >= 40 -> "#D32F2F"
+                        e.score >= 25 -> "#E65100"
+                        else -> "#2E7D32"
+                    }
+                )
+            )
             holder.itemView.setOnClickListener { onClick(app) }
         }
 
