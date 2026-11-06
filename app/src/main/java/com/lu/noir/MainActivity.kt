@@ -115,9 +115,13 @@ class MainActivity : AppCompatActivity() {
             statusText.text = "正在扫描…"
             try {
                 val result = Scanner.scan(this@MainActivity) { done, total, pkg ->
-                    progressBar.max = total
-                    progressBar.progress = done
-                    statusText.text = "正在扫描 $done/$total：$pkg"
+                    // Scanner.scan 在 Dispatchers.Default 里跑，进度回调在后台线程，
+                    // 直接碰 View 会抛 CalledFromWrongThreadException，必须发回主线程。
+                    runOnUiThread {
+                        progressBar.max = total
+                        progressBar.progress = done
+                        statusText.text = "正在扫描 $done/$total：$pkg"
+                    }
                 }
                 lastResult = result
                 allApps = result.apps
