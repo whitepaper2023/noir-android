@@ -12,9 +12,8 @@ jobs:
         run: |
           set -e
           unzip -o noir-android.zip
-          shopt -s dotglob
-          mv noir-android/* .
-          rmdir noir-android
+          cp -a noir-android/. .
+          rm -rf noir-android
           rm -f noir-android.zip .github/workflows/unzip-noir.yml
           git config user.name "whitepaper2023"
           git config user.email "whitepaper2023@users.noreply.github.com"
