@@ -4,11 +4,13 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
@@ -27,7 +29,6 @@ import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
 
 class MainActivity : AppCompatActivity() {
-
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var scanJob: Job? = null
     private var lastResult: ScanResult? = null
@@ -54,18 +55,17 @@ class MainActivity : AppCompatActivity() {
         statusText = findViewById(R.id.statusText)
         summaryText = findViewById(R.id.summaryText)
         progressBar = findViewById(R.id.progressBar)
-
         adapter = AppAdapter { app -> showDetail(app) }
         findViewById<RecyclerView>(R.id.appList).apply {
             layoutManager = LinearLayoutManager(this@MainActivity)
             adapter = this@MainActivity.adapter
         }
-
         findViewById<Button>(R.id.scanButton).setOnClickListener { startScan() }
         findViewById<Button>(R.id.shizukuButton).setOnClickListener { checkShizuku() }
         findViewById<Button>(R.id.exportButton).setOnClickListener { exportReport() }
         findViewById<Button>(R.id.applyButton).setOnClickListener { confirmSafeApply() }
-        findViewById<EditText>(R.id.searchBox).addTextChangedListener(object : TextWatcher {
+        findViewById<EditText>(R.id.searchBox).addTextChangedListener
+        (object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun afterTextChanged(s: Editable?) {
@@ -192,16 +192,44 @@ class MainActivity : AppCompatActivity() {
             textSize = 13f
         }
         val scroll = ScrollView(this).apply { addView(textView) }
-        val builder = AlertDialog.Builder(this)
-            .setTitle(app.label)
-            .setView(scroll)
-            .setPositiveButton("关闭", null)
-        if (e.pkg !in setOf("android", "com.lu.noir", "moe.shizuku.manager")) {
-            builder.setNeutralButton("卸载此应用（需 Shizuku）") { _, _ ->
-                confirmUninstall(e.pkg)
-            }
+        // 1.0.1：按钮放进弹窗自己的布局里（内容区 weight=1，按钮行固定在底）。
+        // 1.0.0 用 AlertDialog 的 neutral button，内容太长时按钮会被顶出屏幕
+        // 底部、只剩半截看不见（真机实测）。
+        val closeButton = Button(this).apply { text = "关闭" }
+        val uninstallButton = Button(this).apply { text = "卸载此应用（需 Shizuku）" }
+        val canUninstall = e.pkg !in setOf("android", "com.lu.noir", "moe.shizuku.manager")
+        val buttonRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            addView(closeButton)
+            if (canUninstall) addView(uninstallButton)
         }
-        builder.show()
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(
+                scroll,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+                )
+            )
+            addView(
+                buttonRow,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(app.label)
+            .setView(root)
+            .create()
+        closeButton.setOnClickListener { dialog.dismiss() }
+        uninstallButton.setOnClickListener {
+            dialog.dismiss()
+            confirmUninstall(e.pkg)
+        }
+        dialog.show()
     }
 
     private fun confirmUninstall(pkg: String) {
@@ -210,17 +238,54 @@ class MainActivity : AppCompatActivity() {
             .setMessage("将执行：pm uninstall --user 0 $pkg\n系统分区里的 APK 还在，恢复命令会写进 rollback.txt：\npm install-existing --user 0 $pkg")
             .setPositiveButton("卸载") { _, _ ->
                 scope.launch {
+                    statusText.text = "正在卸载 $pkg（通过 Shizuku）…"
                     val ok = ShizukuShell.ensurePermission { ShizukuShell.requestPermission() }
                     if (!ok) {
+                        statusText.text = "需要 Shizuku 授权：点“检查 SHIZUKU”授权后再试。"
                         Toast.makeText(this@MainActivity, "需要 Shizuku 授权", Toast.LENGTH_LONG).show()
                         return@launch
                     }
                     val result = withContext(Dispatchers.IO) {
                         ApplyEngine.uninstallOne(this@MainActivity, pkg)
                     }
+                    // 卸载完立刻复核：包还在不在用户 0 的列表里。
+                    // 1.0.0 只报 exit，包到底卸没卸全靠猜；复核结论写进结果弹窗。
+                    val verify = withContext(Dispatchers.IO) {
+                        ShizukuShell.runCommand(
+                            this@MainActivity,
+                            "pm list packages --user 0 $pkg"
+                        )
+                    }
+                    val verified = when {
+                        verify.exitCode != 0 ->
+                            "复核失败（Shizuku 命令没跑通，exit=${verify.exitCode}）：请回 Shizuku App 看服务还在不在，再点“检查 SHIZUKU”。"
+                        verify.stdout.contains(pkg) ->
+                            "复核：未卸载，包还在用户 0 列表里。请把 stdout/stderr 截图发我。"
+                        result.exitCode == 0 ->
+                            "复核：已卸载，包已不在用户 0 列表里。"
+                        else ->
+                            "复核：包已不在用户 0 列表里，但卸载命令 exit=${result.exitCode}，请看下面输出。"
+                    }
+                    val gone = verify.exitCode == 0 && !verify.stdout.contains(pkg)
+                    if (gone) {
+                        allApps = allApps.filter { it.entry.pkg != pkg }
+                        lastResult = lastResult?.copy(apps = allApps)
+                        val query = findViewById<EditText>(R.id.searchBox).text.toString()
+                        applyFilter(query)
+                        val high = allApps.count { it.entry.score >= 40 }
+                        val med = allApps.count { it.entry.score in 25..39 }
+                        summaryText.text =
+                            "共 ${allApps.size} 个应用，高风险 $high 个，中风险 $med 个（刚卸载 $pkg，列表已更新）"
+                        statusText.text = "已卸载 $pkg。"
+                    } else {
+                        statusText.text = "卸载未完成：$pkg 仍在列表里，详见结果弹窗。"
+                    }
                     AlertDialog.Builder(this@MainActivity)
-                        .setTitle("卸载结果：exit=${result.exitCode}")
-                        .setMessage("stdout：\n${result.stdout}\n\nstderr：\n${result.stderr}")
+                        .setTitle(if (gone) "卸载成功" else "卸载结果：exit=${result.exitCode}")
+                        .setMessage(
+                            "$verified\n\n卸载命令：pm uninstall --user 0 $pkg\n" +
+                                "stdout：\n${result.stdout}\n\nstderr：\n${result.stderr}"
+                        )
                         .setPositiveButton("好", null)
                         .show()
                 }
@@ -294,9 +359,7 @@ class MainActivity : AppCompatActivity() {
 
     private class AppAdapter(private val onClick: (ScannedApp) -> Unit) :
         RecyclerView.Adapter<AppAdapter.Holder>() {
-
         private var items: List<ScannedApp> = emptyList()
-
         fun submit(list: List<ScannedApp>) {
             items = list
             notifyDataSetChanged()
