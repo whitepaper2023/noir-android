@@ -72,3 +72,26 @@
   碰到过拦截的包记进 prefs（protected_pkgs），下次扫描列表行与详情都标“受保护”。
   注意：vivo 账号验证弹窗那次（23:10，com.vivo.familycare.widget）pm 的返回未知，未纳入翻译。
 - 版本：versionCode 4，versionName 1.0.3。签名仍用同一把 release.keystore（别名 clashfirewall）。
+
+## 1.0.4 (2026-11-07, Lu 要求)
+- 恢复按钮（Lu 2026-11-07 00:28 要求）：主界面加“恢复”按钮，读 rollback.txt，
+  把里面的非注释行逐条经 Shizuku 执行，逐条报 exit 与输出；恢复命令都是幂等的
+  （appops 设回原模式、pm install-existing、pm enable），恢复完文件留着，再点
+  一次也无害；成功启用的应用就地去掉“已停用”标记，恢复后建议重扫一次刷新列表。
+- rollback.txt 追加修复：applySafe 原来每次都覆盖 rollback.txt，跑一次安全处置
+  就会把之前卸载/停用的恢复命令冲掉，改成追加；同一个 (pkg, op) 只保留最早那条
+  回滚行（恢复的是最初状态），同一处置跑第二遍不再重复写——第二遍查到的“原模式”
+  已是第一遍改完的状态，再写会把恢复目标写错（恢复完还停在 ignore）。
+- 图标（Lu 选 7 号）：红色霓虹发光盾 + 蓝色霓虹锁，黑底。AI 生成图是黑底上的加色光，
+  转换时按 alpha = 最大通道值去掉黑底做自适应前景（脚本 make_icon_from_image.py），
+  legacy 图标在 #101014 底上合成；全套尺寸 mdpi~xxxhdpi + 自适应前景（xxxhdpi 432px）。
+- 闪退修复（Lu 2026-11-07 00:44 反馈：开始扫描一段时间后闪退，之前版本也出现过）：
+  旧代码扫 dex 是整文件 readBytes() 进内存，一个大 dex（微信这类几十 MB）一份字节
+  数组，deepScan 还要再复制一份同样大小的 String，峰值上百 MB，堆一紧张就
+  OutOfMemoryError；Error 不进 catch (Exception)，直接崩掉整轮扫描。改法：
+  ApkScan.urls 与 Scanner.deepScan 都改成流式读（1MB / 64KB 一块），块之间留重叠
+  （URL 320 字节、关键字 64 字节），跨块的 URL 与关键字也能扫到，内存峰值 1MB 出头；
+  单个应用的 try/catch 与 Manifest 解析、扫描入口的 catch 都改抓 Throwable，
+  单个应用出任何问题都只跳过它，不再崩整轮；另加崩溃日志——未捕获异常写进
+  noir-out/crash.txt，扫描失败写进 noir-out/scan-error.txt，下次再出问题有据可查。
+- 版本：versionCode 5，versionName 1.0.4。签名仍用同一把 release.keystore（别名 clashfirewall）。
