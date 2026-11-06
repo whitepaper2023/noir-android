@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NOIR</string>
+    <string name="scan">开始扫描</string>
+    <string name="scanning">正在扫描…</string>
+    <string name="export_report">导出报告</string>
+    <string name="safe_apply">执行安全处置</string>
+    <string name="check_shizuku">检查 Shizuku</string>
+    <string name="search_hint">搜索包名 / 应用名</string>
+</resources>
