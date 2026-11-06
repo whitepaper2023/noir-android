@@ -68,6 +68,13 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="@string/safe_apply" />
+
+        <Button
+            android:id="@+id/restoreButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/restore" />
     </LinearLayout>
 
     <EditText
