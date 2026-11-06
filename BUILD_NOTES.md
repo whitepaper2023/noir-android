@@ -95,3 +95,14 @@
   单个应用出任何问题都只跳过它，不再崩整轮；另加崩溃日志——未捕获异常写进
   noir-out/crash.txt，扫描失败写进 noir-out/scan-error.txt，下次再出问题有据可查。
 - 版本：versionCode 5，versionName 1.0.4。签名仍用同一把 release.keystore（别名 clashfirewall）。
+
+## 1.0.5 (2026-11-07, Lu 要求）
+
+Lu 说主界面 5 个按钮太丑、底色不要黑色。改版只动界面，不动扫描/处置逻辑：
+
+- 主题：themes.xml 从 `Theme.MaterialComponents.DayNight.NoActionBar`（深色模式下全黑底、按钮近黑）改成 `Theme.MaterialComponents.Light.NoActionBar`，强制浅色，手机开深色模式也不变黑；colorPrimary 改红 `#D32F2F`（与新图标红盾同色），colorPrimaryDark `#9A0007`，colorAccent 蓝 `#1565C0`（与锁同色，进度条着色用）。
+- 布局（activity_main.xml 全重写）：根布局浅灰底 `#F4F6F8`、16dp 边距；状态与列表各放进一个白底 MaterialCardView（16dp 圆角、2dp 阴影）；开始扫描是红色通栏大按钮（52dp 高、白字 16sp、12dp 圆角）；其余 4 个按钮白色圆角 2x2（48dp 高、深色字、#DDDDDD 1dp 描边），用框架 GridLayout（columnWeight 均分，minSdk 26 没问题）；搜索框 48dp 高、圆角白底（新文件 drawable/search_bg.xml，12dp 圆角、#DDDDDD 描边）；列表卡片占剩余高度。全部 view ID 不变，MainActivity 接线不用改。
+- 列表项（item_app.xml 全重写）：12dp 内边距、ripple 背景、标题深色加粗 15sp、副文/分数灰色 13sp、底部 1dp #EEEEEE 分隔线。
+- 分数着色（MainActivity.kt，onBindViewHolder）：风险分 ≥40 红 `#D32F2F`、≥25 橙 `#E65100`、其余绿 `#2E7D32`。
+- 详情弹窗的按钮是代码里 Button(this) 现建的，浅色主题下自动变白底红字，不用改。
+- 版本：versionCode 6，versionName 1.0.5。签名仍用同一把 release.keystore（别名 clashfirewall）。
