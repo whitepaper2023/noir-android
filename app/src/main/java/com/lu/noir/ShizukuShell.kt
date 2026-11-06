@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.IBinder
 import android.os.RemoteException
 import androidx.annotation.Keep
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -114,61 +115,95 @@ object ShizukuShell {
     }
 
     /**
-     * 经 UserService 执行一条 shell 命令。每次调用都重新绑定，
-     * 用完即解绑；失败返回 exit=-1 而不是抛异常，调用方按文本展示。
+     * 经 UserService 执行一条 shell 命令。失败返回 exit=-1 而不是抛异常，
+     * 调用方按文本展示。
+     *
+     * 1.0.1 改动（真机实测：卸载命令等满 60 秒才报超时）：
+     * 先预检 Shizuku 是否在跑、有没有授权，不行立刻返回，不进空等；
+     * 绑定必须在主线程发起（与官方 demo 一致），只等 15 秒——回调
+     * 不来就说明服务端已断（无线调试掉线），不再空等 60 秒；
+     * 绑上之后命令本身仍给 60 秒。
      */
-    suspend fun runCommand(context: Context, command: String): ShellResult =
-        withContext(Dispatchers.IO) {
-            val raw = withTimeoutOrNull(60_000L) {
-                suspendCancellableCoroutine { cont ->
-                    val args = Shizuku.UserServiceArgs(
-                        ComponentName(context.packageName, NoirShellService::class.java.name)
-                    ).daemon(false).processNameSuffix("noir").version(1)
-                    var service: IShellService? = null
-                    val conn = object : ServiceConnection {
-                        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-                            try {
-                                service = if (binder != null && binder.pingBinder()) {
-                                    IShellService.Stub.asInterface(binder)
-                                } else {
-                                    null
-                                }
-                                val result = try {
-                                    service?.runCommand(command) ?: "exit=-1\n\n---STDERR---\nno binder"
-                                } catch (e: RemoteException) {
-                                    "exit=-1\n\n---STDERR---\n" + (e.message ?: e.toString())
-                                }
-                                if (cont.isActive) cont.resume(result)
-                            } finally {
-                                try {
-                                    Shizuku.unbindUserService(args, this, true)
-                                } catch (e: Exception) {
-                                    // 解绑失败不影响结果
-                                }
-                            }
-                        }
+    suspend fun runCommand(context: Context, command: String): ShellResult {
+        try {
+            if (!Shizuku.pingBinder()) {
+                return ShellResult(
+                    -1, "",
+                    "Shizuku 未运行：请先在 Shizuku App 里启动，再回 NOIR 点“检查 SHIZUKU”"
+                )
+            }
+            if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+                return ShellResult(
+                    -1, "",
+                    "NOIR 未获 Shizuku 授权：请回 NOIR 点“检查 SHIZUKU”授权"
+                )
+            }
+        } catch (e: Exception) {
+            return ShellResult(-1, "", "Shizuku 状态检查失败：${e.message}")
+        }
+        val args = Shizuku.UserServiceArgs(
+            ComponentName(context.packageName, NoirShellService::class.java.name)
+        ).daemon(false).processNameSuffix("noir").version(1)
+        // conn 必须是 non-null val：Shizuku.bind/unbindUserService 的
+        // ServiceConnection 参数是 @NonNull，nullable 变量传进去编不过。
+        // continuation 经 contRef 递过去，绑定调用本身在主线程发起。
+        var contRef: CancellableContinuation<IBinder?>? = null
+        val conn = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, b: IBinder?) {
+                contRef?.let { if (it.isActive) it.resume(b) }
+            }
 
-                        override fun onServiceDisconnected(name: ComponentName?) {
-                            if (cont.isActive) {
-                                cont.resume("exit=-1\n\n---STDERR---\nservice disconnected")
-                            }
-                        }
-                    }
+            override fun onServiceDisconnected(name: ComponentName?) {
+                contRef?.let { if (it.isActive) it.resume(null) }
+            }
+        }
+        val binder = withTimeoutOrNull(15_000L) {
+            withContext(Dispatchers.Main) {
+                suspendCancellableCoroutine { cont ->
+                    contRef = cont
                     try {
                         Shizuku.bindUserService(args, conn)
                     } catch (e: Exception) {
-                        if (cont.isActive) {
-                            cont.resume("exit=-1\n\n---STDERR---\n" + (e.message ?: e.toString()))
-                        }
+                        if (cont.isActive) cont.resume(null)
                     }
                     cont.invokeOnCancellation {
+                        contRef = null
                         try {
                             Shizuku.unbindUserService(args, conn, true)
-                        } catch (e: Exception) {
+                        } catch (_: Exception) {
                         }
                     }
                 }
             }
-            ShellResult.parse(raw ?: "exit=-1\n\n---STDERR---\ntimeout after 60s")
         }
+        if (binder == null || !binder.pingBinder()) {
+            try {
+                Shizuku.unbindUserService(args, conn, true)
+            } catch (_: Exception) {
+            }
+            return ShellResult(
+                -1, "",
+                "绑定 Shizuku 服务超时：服务端可能已断开（无线调试掉线是已知问题），" +
+                    "请回 Shizuku App 点启动，再回 NOIR 点“检查 SHIZUKU”"
+            )
+        }
+        return try {
+            val service = IShellService.Stub.asInterface(binder)
+            val raw = withContext(Dispatchers.IO) {
+                withTimeoutOrNull(60_000L) {
+                    try {
+                        service.runCommand(command)
+                    } catch (e: RemoteException) {
+                        "exit=-1\n\n---STDERR---\n" + (e.message ?: e.toString())
+                    }
+                }
+            }
+            ShellResult.parse(raw ?: "exit=-1\n\n---STDERR---\ntimeout after 60s")
+        } finally {
+            try {
+                Shizuku.unbindUserService(args, conn, true)
+            } catch (_: Exception) {
+            }
+        }
+    }
 }
