@@ -1,94 +1,159 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="#F4F6F8"
     android:orientation="vertical"
-    android:padding="12dp">
+    android:padding="16dp">
 
-    <TextView
-        android:id="@+id/statusText"
+    <!-- 状态卡片 -->
+    <com.google.android.material.card.MaterialCardView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="NOIR：本机隐私审计，不联网、不上传。\n先点“检查 Shizuku”，再点“开始扫描”。"
-        android:textSize="14sp" />
+        app:cardBackgroundColor="#FFFFFF"
+        app:cardCornerRadius="16dp"
+        app:cardElevation="2dp">
 
-    <TextView
-        android:id="@+id/summaryText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:text="尚未扫描"
-        android:textSize="14sp" />
-
-    <ProgressBar
-        android:id="@+id/progressBar"
-        style="?android:attr/progressBarStyleHorizontal"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:visibility="gone" />
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:orientation="horizontal">
-
-        <Button
-            android:id="@+id/scanButton"
-            android:layout_width="0dp"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/scan" />
+            android:orientation="vertical"
+            android:padding="16dp">
 
-        <Button
+            <TextView
+                android:id="@+id/statusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="NOIR：本机隐私审计，不联网、不上传。\n先点“检查 Shizuku”，再点“开始扫描”。"
+                android:textColor="#1A1A1A"
+                android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/summaryText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="尚未扫描"
+                android:textColor="#666666"
+                android:textSize="14sp" />
+
+            <ProgressBar
+                android:id="@+id/progressBar"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:visibility="gone" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
+    <!-- 主按钮：开始扫描 -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/scanButton"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:layout_marginTop="12dp"
+        android:text="@string/scan"
+        android:textColor="#FFFFFF"
+        android:textSize="16sp"
+        app:backgroundTint="#D32F2F"
+        app:cornerRadius="12dp" />
+
+    <!-- 4 个次按钮：2x2 白色圆角 -->
+    <GridLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:columnCount="2"
+        android:rowCount="2">
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/shizukuButton"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/check_shizuku" />
-    </LinearLayout>
+            android:layout_height="48dp"
+            android:layout_columnWeight="1"
+            android:layout_gravity="fill_horizontal"
+            android:layout_marginEnd="4dp"
+            android:text="@string/check_shizuku"
+            android:textColor="#1A1A1A"
+            app:backgroundTint="#FFFFFF"
+            app:cornerRadius="12dp"
+            app:strokeColor="#DDDDDD"
+            app:strokeWidth="1dp" />
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:orientation="horizontal">
-
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/exportButton"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/export_report" />
+            android:layout_height="48dp"
+            android:layout_columnWeight="1"
+            android:layout_gravity="fill_horizontal"
+            android:layout_marginStart="4dp"
+            android:text="@string/export_report"
+            android:textColor="#1A1A1A"
+            app:backgroundTint="#FFFFFF"
+            app:cornerRadius="12dp"
+            app:strokeColor="#DDDDDD"
+            app:strokeWidth="1dp" />
 
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/applyButton"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/safe_apply" />
+            android:layout_height="48dp"
+            android:layout_columnWeight="1"
+            android:layout_gravity="fill_horizontal"
+            android:layout_marginEnd="4dp"
+            android:layout_marginTop="8dp"
+            android:text="@string/safe_apply"
+            android:textColor="#1A1A1A"
+            app:backgroundTint="#FFFFFF"
+            app:cornerRadius="12dp"
+            app:strokeColor="#DDDDDD"
+            app:strokeWidth="1dp" />
 
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/restoreButton"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/restore" />
-    </LinearLayout>
+            android:layout_height="48dp"
+            android:layout_columnWeight="1"
+            android:layout_gravity="fill_horizontal"
+            android:layout_marginStart="4dp"
+            android:layout_marginTop="8dp"
+            android:text="@string/restore"
+            android:textColor="#1A1A1A"
+            app:backgroundTint="#FFFFFF"
+            app:cornerRadius="12dp"
+            app:strokeColor="#DDDDDD"
+            app:strokeWidth="1dp" />
+    </GridLayout>
 
+    <!-- 搜索框 -->
     <EditText
         android:id="@+id/searchBox"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="48dp"
         android:layout_marginTop="8dp"
+        android:background="@drawable/search_bg"
         android:hint="@string/search_hint"
-        android:inputType="text" />
+        android:inputType="text"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:textColor="#1A1A1A"
+        android:textColorHint="#999999" />
 
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/appList"
+    <!-- 列表卡片 -->
+    <com.google.android.material.card.MaterialCardView
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_marginTop="8dp"
-        android:layout_weight="1" />
+        android:layout_weight="1"
+        app:cardBackgroundColor="#FFFFFF"
+        app:cardCornerRadius="16dp"
+        app:cardElevation="2dp">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/appList"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+    </com.google.android.material.card.MaterialCardView>
 </LinearLayout>
