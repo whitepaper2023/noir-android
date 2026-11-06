@@ -61,3 +61,14 @@
   标记，列表行与详情都显示“已停用”，停用/启用后就地更新标记不用重扫。受保护包
   （android / com.lu.noir / moe.shizuku.manager）既不能卸载也不能停用。
 - 版本：versionCode 3，versionName 1.0.2。签名仍用同一把 release.keystore（别名 clashfirewall）。
+
+## 1.0.3 (2026-11-07, 真机反馈)
+- 受保护提示（2026-11-07 00:05 真机反馈，Lu 要求加）：com.bbk.account（vivo账号）卸载报
+  `Failure [DELETE_FAILED_USER_RESTRICTED]`、停用报 `Cannot disable ... no root permission`，
+  报错原文看着像程序出 bug。已对照 AOSP 源码核实：这是 vivo 受保护包列表的硬拦
+  （mProtectedPackages.isPackageStateProtected），Shizuku 的 shell 身份过不去，要 root 才行。
+  改法：结果弹窗里把这两类系统拦截翻译成人话（“这是系统受保护应用，系统不让卸载/停用，
+  需要 root 才能动，不是 Shizuku 的问题。”），只认实际碰到过的两种原文，不猜；
+  碰到过拦截的包记进 prefs（protected_pkgs），下次扫描列表行与详情都标“受保护”。
+  注意：vivo 账号验证弹窗那次（23:10，com.vivo.familycare.widget）pm 的返回未知，未纳入翻译。
+- 版本：versionCode 4，versionName 1.0.3。签名仍用同一把 release.keystore（别名 clashfirewall）。
