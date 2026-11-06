@@ -14,6 +14,8 @@ import app.noir.core.apk.ManifestAnalyzer
 import app.noir.core.apk.ManifestFacts
 import app.noir.core.apk.Trackers
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.zip.ZipFile
@@ -73,6 +75,9 @@ object Scanner {
             .getStringSet("protected_pkgs", emptySet()) ?: emptySet()
         val out = ArrayList<ScannedApp>()
         packages.forEachIndexed { index, pkgInfo ->
+            // 1.0.6：每个应用开头检查一次取消——用户点停能立刻停，不用等整轮跑完；
+            // 阻塞式 dex 读本身不停顿，取消信号靠这里递进。
+            currentCoroutineContext().ensureActive()
             val pkg = pkgInfo.packageName
             try {
                 val appInfo = pkgInfo.applicationInfo ?: return@forEachIndexed
