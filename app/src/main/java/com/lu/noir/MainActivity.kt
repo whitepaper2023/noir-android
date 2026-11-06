@@ -29,6 +29,7 @@ import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
 
 class MainActivity : AppCompatActivity() {
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var scanJob: Job? = null
     private var lastResult: ScanResult? = null
@@ -55,17 +56,18 @@ class MainActivity : AppCompatActivity() {
         statusText = findViewById(R.id.statusText)
         summaryText = findViewById(R.id.summaryText)
         progressBar = findViewById(R.id.progressBar)
+
         adapter = AppAdapter { app -> showDetail(app) }
         findViewById<RecyclerView>(R.id.appList).apply {
             layoutManager = LinearLayoutManager(this@MainActivity)
             adapter = this@MainActivity.adapter
         }
+
         findViewById<Button>(R.id.scanButton).setOnClickListener { startScan() }
         findViewById<Button>(R.id.shizukuButton).setOnClickListener { checkShizuku() }
         findViewById<Button>(R.id.exportButton).setOnClickListener { exportReport() }
         findViewById<Button>(R.id.applyButton).setOnClickListener { confirmSafeApply() }
-        findViewById<EditText>(R.id.searchBox).addTextChangedListener
-        (object : TextWatcher {
+        findViewById<EditText>(R.id.searchBox).addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun afterTextChanged(s: Editable?) {
@@ -359,7 +361,9 @@ class MainActivity : AppCompatActivity() {
 
     private class AppAdapter(private val onClick: (ScannedApp) -> Unit) :
         RecyclerView.Adapter<AppAdapter.Holder>() {
+
         private var items: List<ScannedApp> = emptyList()
+
         fun submit(list: List<ScannedApp>) {
             items = list
             notifyDataSetChanged()
