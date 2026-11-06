@@ -106,3 +106,14 @@ Lu 说主界面 5 个按钮太丑、底色不要黑色。改版只动界面，�
 - 分数着色（MainActivity.kt，onBindViewHolder）：风险分 ≥40 红 `#D32F2F`、≥25 橙 `#E65100`、其余绿 `#2E7D32`。
 - 详情弹窗的按钮是代码里 Button(this) 现建的，浅色主题下自动变白底红字，不用改。
 - 版本：versionCode 6，versionName 1.0.5。签名仍用同一把 release.keystore（别名 clashfirewall）。
+
+## 1.0.6 (2026-11-07，修扫描中途退出）
+
+根因（Lu 2026-11-07 06:43 反馈“又突然退出了”、06:51 补“扫描快结束时退出了”，并附 scan-error.txt）：扫描跑在 MainActivity 自己的 `CoroutineScope(SupervisorJob())` 里，`onDestroy()` 一调 `scope.cancel()`，扫描就被取消——切后台、锁屏后 vivo 回收 Activity、转屏，都会让一场扫了几分钟的扫描在快结束时白跑，界面直接没了。证据：scan-error.txt 里 2026-11-07 01:12:20 那条正是 `JobCancellationException: Job was cancelled; job=SupervisorJobImpl{Cancelling}`，而 crash.txt 是空的——不是内存爆了、不是程序崩了，是 Activity 被系统销毁、扫描被连带取消。1.0.4 的流式读修复仍在包里，没白做；这次是另一个问题。
+
+修法（只动扫描的归属，不动扫描逻辑）：
+- 新文件 ScanManager.kt（应用级单例）：扫描跑在它自己的 `CoroutineScope(SupervisorJob() + Dispatchers.Main)` 里，Activity 销毁、重建都不影响；进度与结果存在单例里（lastDone/lastTotal/lastPkg/lastResult/lastError），Activity 在 onCreate 里接回——扫一半重开应用能看到进度接着跑，扫完重开能看到结果；失败才写 scan-error.txt（日志逻辑从 MainActivity 搬过来），用户主动点停不算错误、不记日志。
+- MainActivity：删 Activity 级的 scanJob/lastResult，startScan 改调 ScanManager.toggleScan（扫一半再点一次 = 主动停止，状态显示“扫描已停止。”）；onDestroy 只注销进度回调，不再取消扫描；Activity 级 scope 留给卸载/停用/处置/恢复那些短操作，照旧 onDestroy 取消。
+- AndroidManifest：MainActivity 加 `configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"`，转屏不再重建 Activity。
+- Scanner.scan：每扫一个应用开头调一次 `ensureActive()`，用户点停能立刻停，不用等整轮跑完（阻塞式 dex 读本身不停顿，取消信号靠这里递进）。
+- 版本：versionCode 7，versionName 1.0.6。签名仍用同一把 release.keystore（别名 clashfirewall）。
