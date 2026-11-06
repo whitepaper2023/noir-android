@@ -5,6 +5,7 @@
     <string name="scanning">正在扫描…</string>
     <string name="export_report">导出报告</string>
     <string name="safe_apply">执行安全处置</string>
+    <string name="restore">恢复</string>
     <string name="check_shizuku">检查 Shizuku</string>
     <string name="search_hint">搜索包名 / 应用名</string>
 </resources>
