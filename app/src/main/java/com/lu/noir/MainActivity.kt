@@ -160,6 +160,7 @@ class MainActivity : AppCompatActivity() {
         sb.append("应用：${app.label}\n包名：${e.pkg}\n")
         sb.append("分数：${e.score}  分类：${e.category.label}  厂商：${e.vendor ?: "—"}\n")
         sb.append("系统应用：${if (e.isSystem) "是" else "否"}  可调试：${if (e.debuggable) "是" else "否"}  状态：${if (app.disabled) "已停用" else "启用中"}\n")
+        if (app.systemProtected) sb.append("受保护：是（系统不让卸载/停用，需 root）\n")
         sb.append("UID：${e.uid}  共享 UID：${e.sharedUid ?: "—"}  安装来源：${e.installer ?: "—"}\n\n")
         sb.append("可读数据：${e.dataTypes.joinToString("、") { it.label }.ifEmpty { "无" }}\n\n")
         sb.append("权限（${e.permissions.size}）：\n${e.permissions.joinToString("\n")}\n\n")
@@ -258,6 +259,36 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
+    // 1.0.3：系统拦截翻译成人话。受保护应用（vivo 账号这类）卸载/停用被系统硬拦，
+    // 报错原文（DELETE_FAILED_USER_RESTRICTED、Cannot disable ... no root permission）
+    // 看着像程序出 bug，翻译后才看得懂。只认实际碰到过的两种原文，不猜。
+    private fun protectedHint(stdout: String, stderr: String): String? {
+        val text = "$stdout\n$stderr"
+        return when {
+            text.contains("DELETE_FAILED_USER_RESTRICTED") ->
+                "这是系统受保护应用，系统不让卸载（需要 root 才能动），不是 Shizuku 的问题。"
+            text.contains("Cannot disable") &&
+                (text.contains("no root permission") || text.contains("protected package")) ->
+                "这是系统受保护应用，系统不让停用（需要 root 才能动），不是 Shizuku 的问题。"
+            else -> null
+        }
+    }
+
+    // 1.0.3：碰到过系统拦截的包记进 prefs，下次扫描列表里标“受保护”。
+    private fun markProtected(pkg: String) {
+        val prefs = getSharedPreferences("noir", MODE_PRIVATE)
+        val set = prefs.getStringSet("protected_pkgs", emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (set.add(pkg)) {
+            prefs.edit().putStringSet("protected_pkgs", set).apply()
+            allApps = allApps.map {
+                if (it.entry.pkg == pkg) it.copy(systemProtected = true) else it
+            }
+            lastResult = lastResult?.copy(apps = allApps)
+            val query = findViewById<EditText>(R.id.searchBox).text.toString()
+            applyFilter(query)
+        }
+    }
+
     private fun confirmUninstall(pkg: String) {
         AlertDialog.Builder(this)
             .setTitle("卸载 $pkg？")
@@ -306,10 +337,13 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         statusText.text = "卸载未完成：$pkg 仍在列表里，详见结果弹窗。"
                     }
+                    val hint = protectedHint(result.stdout, result.stderr)
+                    if (hint != null) markProtected(pkg)
                     AlertDialog.Builder(this@MainActivity)
                         .setTitle(if (gone) "卸载成功" else "卸载结果：exit=${result.exitCode}")
                         .setMessage(
-                            "$verified\n\n卸载命令：pm uninstall --user 0 $pkg\n" +
+                            (if (hint != null) "$hint\n\n" else "") +
+                                "$verified\n\n卸载命令：pm uninstall --user 0 $pkg\n" +
                                 "stdout：\n${result.stdout}\n\nstderr：\n${result.stderr}"
                         )
                         .setPositiveButton("好", null)
@@ -371,10 +405,13 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         statusText.text = "停用未完成：$pkg 仍在运行，详见结果弹窗。"
                     }
+                    val hint = protectedHint(result.stdout, result.stderr)
+                    if (hint != null) markProtected(pkg)
                     AlertDialog.Builder(this@MainActivity)
                         .setTitle(if (disabled) "停用成功" else "停用结果：exit=${result.exitCode}")
                         .setMessage(
-                            "$verified\n\n停用命令：pm disable-user --user 0 $pkg\n" +
+                            (if (hint != null) "$hint\n\n" else "") +
+                                "$verified\n\n停用命令：pm disable-user --user 0 $pkg\n" +
                                 "stdout：\n${result.stdout}\n\nstderr：\n${result.stderr}"
                         )
                         .setPositiveButton("好", null)
@@ -536,7 +573,8 @@ class MainActivity : AppCompatActivity() {
             holder.title.text = "${app.label}（${e.pkg}）"
             holder.meta.text = "${e.category.label} · ${e.vendor ?: "—"} · " +
                 "${if (e.isSystem) "系统" else "用户"} · 权限 ${e.permissions.size} · 上报 ${e.uploadEndpoints.size}" +
-                if (app.disabled) " · 已停用" else ""
+                if (app.disabled) " · 已停用" else "" +
+                if (app.systemProtected) " · 受保护" else ""
             holder.score.text = "风险分：${e.score}" +
                 if (e.score >= 40) "（高）" else if (e.score >= 25) "（中）" else "（低）"
             holder.itemView.setOnClickListener { onClick(app) }

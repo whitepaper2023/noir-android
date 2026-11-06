@@ -27,7 +27,10 @@ data class ScannedApp(
     val apkPaths: List<String>,
     // 1.0.2：是否已被停用（pm disable-user）。扫描时按 ApplicationInfo.enabled 取，
     // 停用/启用操作后就地更新，不用重扫。
-    val disabled: Boolean = false
+    val disabled: Boolean = false,
+    // 1.0.3：是否系统受保护应用。只认实际碰到过系统拦截的包（见 MainActivity.markProtected），
+    // 存在 prefs 里，扫描时读出来打标，不靠猜、不靠包名黑名单。
+    val systemProtected: Boolean = false
 )
 
 data class ScanResult(
@@ -65,6 +68,9 @@ object Scanner {
                 PackageManager.GET_PROVIDERS
         )
         val total = packages.size
+        // 1.0.3：受保护标记从 prefs 读（见 MainActivity.markProtected）。
+        val protectedPkgs = context.getSharedPreferences("noir", Context.MODE_PRIVATE)
+            .getStringSet("protected_pkgs", emptySet()) ?: emptySet()
         val out = ArrayList<ScannedApp>()
         packages.forEachIndexed { index, pkgInfo ->
             val pkg = pkgInfo.packageName
@@ -129,7 +135,8 @@ object Scanner {
                         trackers = Trackers.fromEndpoints(endpoints.toList()),
                         deepHits = deepHits,
                         apkPaths = apkPaths,
-                        disabled = !appInfo.enabled
+                        disabled = !appInfo.enabled,
+                        systemProtected = pkg in protectedPkgs
                     )
                 )
             } catch (e: Exception) {
