@@ -75,12 +75,16 @@ object Domains {
 
     private val BLOCK_SUBSTRINGS = listOf(
         "applog", "errlog", "errnewlog", "rtlog", "rtapplog", "uplog", "apmlog", "aegis-log",
-        "report", "monitor", "analytics", "beacon", "track", "collect", "crash", "metrics",
+        "monitor", "beacon", "track", "collect", "crash", "metrics",
         "telemetry", "umeng", "appsflyer", "adjust", "oceanengine", "zijieapi", "qplus",
         "snssdk", "cnzz", "growingio", "sensorsdata", "mixpanel", "amplitude", "pangle",
         "sigmob", "adashx", "pingma", "talkingdata", "bugtrace", "huatuo", "apmplus",
         "coverage", "zxid", "oaid", "wkanx", "videoreport"
     )
+
+    // These are safe to match inside a concatenated label (e.g.
+    // rttgpsreport) without turning ordinary words into trackers.
+    private val BLOCK_CONTAINS = listOf("report", "analytics")
 
     private val TEST_LABELS = setOf(
         "test", "testing", "staging", "stg", "dev", "daily", "preview", "sandbox"
@@ -114,14 +118,24 @@ object Domains {
         val labels = host.lowercase().split('.')
         if (labels.any { it in TEST_LABELS }) return DomainClass.REVIEW
 
-        if (labels.any { it in FUNCTIONAL_LABELS }) return DomainClass.FUNCTIONAL
-        if (FUNCTIONAL_SUBSTRINGS.any { host.contains(it) }) return DomainClass.FUNCTIONAL
-
+        // 1.0.8（同步上游 0.4.2）：追踪标签优先于通用功能标签——
+        // tracking.googleapis.evil.com 不能因为含 googleapis 就变成“不用拦”。
+        // 另外 `static`、`station` 以前会被当成追踪器（startsWith("stat")），
+        // 现在只有 stat / stats / statistic* 才算。
         if (labels.any { it in BLOCK_EXACT }) return DomainClass.TRACKER
-        if (labels.any { label -> BLOCK_SUBSTRINGS.any { label.contains(it) } }) return DomainClass.TRACKER
+        if (labels.any { label ->
+                BLOCK_SUBSTRINGS.any { label.startsWith(it) } ||
+                    BLOCK_CONTAINS.any { label.contains(it) }
+            }
+        ) return DomainClass.TRACKER
+        // `stat` / `stats` / `statistic` are trackers; `static`, `station` and
+        // `status` are not.
+        if (labels.any { it == "stat" || it == "stats" || it.startsWith("statistic") }) {
+            return DomainClass.TRACKER
+        }
 
-        // `stat` / `stats` / `statistic` are trackers; `status` is not.
-        if (labels.any { it.startsWith("stat") && !it.startsWith("status") }) return DomainClass.TRACKER
+        if (labels.any { it in FUNCTIONAL_LABELS }) return DomainClass.FUNCTIONAL
+        if (labels.any { it in FUNCTIONAL_SUBSTRINGS }) return DomainClass.FUNCTIONAL
 
         return DomainClass.REVIEW
     }
