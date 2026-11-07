@@ -73,6 +73,8 @@ object Scanner {
         // 1.0.3：受保护标记从 prefs 读（见 MainActivity.markProtected）。
         val protectedPkgs = context.getSharedPreferences("noir", Context.MODE_PRIVATE)
             .getStringSet("protected_pkgs", emptySet()) ?: emptySet()
+        // 1.0.7：已处置的 (pkg, op)——打标、扣分、Advisor 跳过重复建议的依据。
+        val appliedMap = ApplyEngine.appliedOps(context)
         val out = ArrayList<ScannedApp>()
         packages.forEachIndexed { index, pkgInfo ->
             // 1.0.6：每个应用开头检查一次取消——用户点停能立刻停，不用等整轮跑完；
@@ -113,7 +115,13 @@ object Scanner {
                 }
                 val debuggable = manifest?.debuggable
                     ?: ((appInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0)
-                val score = Rules.score(perms, endpoints.toList(), isSystem, debuggable)
+                // 1.0.7：处置过的能力不再计分——先算原始分，再扣被禁掉的那部分
+                //（录屏 -5、使用统计 -1，见 Rules.remediatedScore），下限 0。
+                val appliedOps = appliedMap[pkg].orEmpty()
+                val score = Rules.remediatedScore(
+                    Rules.score(perms, endpoints.toList(), isSystem, debuggable),
+                    perms, appliedOps
+                )
                 val entry = AppEntry(
                     pkg = pkg,
                     uid = appInfo.uid.toString(),
@@ -129,7 +137,8 @@ object Scanner {
                     score = score,
                     category = Classifier.category(pkg, endpoints.toList(), perms, isSystem),
                     vendor = Classifier.vendor(pkg, endpoints.toList()),
-                    sharedUid = pkgInfo.sharedUserId
+                    sharedUid = pkgInfo.sharedUserId,
+                    appliedOps = appliedOps
                 )
                 val deepHits = deepScan(apkPaths)
                 out.add(
