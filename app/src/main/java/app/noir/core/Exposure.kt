@@ -33,6 +33,7 @@ object Exposure {
         "RECEIVE_SMS" to setOf(DataType.SMS),
         "READ_CALL_LOG" to setOf(DataType.CALLS),
         "READ_PHONE_STATE" to setOf(DataType.IDENTITY),
+        "READ_PHONE_NUMBERS" to setOf(DataType.IDENTITY),
         "READ_PRIVILEGED_PHONE_STATE" to setOf(DataType.IDENTITY),
         "RECORD_AUDIO" to setOf(DataType.MIC),
         "CAPTURE_AUDIO_OUTPUT" to setOf(DataType.MIC),
@@ -44,6 +45,7 @@ object Exposure {
         "MANAGE_EXTERNAL_STORAGE" to setOf(DataType.FILES),
         "READ_MEDIA_IMAGES" to setOf(DataType.FILES),
         "READ_MEDIA_VIDEO" to setOf(DataType.FILES),
+        "READ_MEDIA_AUDIO" to setOf(DataType.FILES),
         "READ_EXTERNAL_STORAGE" to setOf(DataType.FILES),
         "READ_CALENDAR" to setOf(DataType.CALENDAR),
         "GET_ACCOUNTS" to setOf(DataType.ACCOUNTS)
@@ -52,8 +54,20 @@ object Exposure {
     fun dataTypes(permissions: List<String>): Set<DataType> =
         permissions.flatMap { MAP[it].orEmpty() }.toSortedSet(compareBy { it.ordinal })
 
+    // 1.0.8（同步上游 0.4.2）：host 解析更严——去 userinfo、问号、# 号、
+    // IPv6 方括号；以前 userinfo 里带 @ 的 URL 会把用户名当 host。
     fun hostOf(url: String): String? {
-        val host = url.substringAfter("://", "").substringBefore('/').substringBefore(':').lowercase()
+        val authority = url.substringAfter("://", "")
+            .substringBefore('/')
+            .substringBefore('?')
+            .substringBefore('#')
+            .substringAfterLast('@')
+        if (authority.isBlank()) return null
+        val host = if (authority.startsWith("[")) {
+            authority.substringBefore(']').removePrefix("[")
+        } else {
+            authority.substringBefore(':')
+        }.lowercase()
         return host.takeIf { it.contains('.') && it.isNotBlank() }
     }
 
