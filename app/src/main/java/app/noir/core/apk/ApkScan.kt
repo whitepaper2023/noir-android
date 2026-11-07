@@ -21,7 +21,12 @@ object ApkScan {
                 val entry = entries.nextElement()
                 if (!entry.name.startsWith("classes") || !entry.name.endsWith(".dex")) continue
                 if (entry.size <= 0 || entry.size > 64L * 1024 * 1024) continue
-                zip.getInputStream(entry).use { input ->
+                // 1.0.8（同步上游 0.4.2）：单条 dex 读坏了只跳过这一条，
+                // 前面 dex 已扫到的 URL 留着；不接住的话这条一坏，整个
+                // 应用的端点就全丢了（以前靠 Scanner 按应用接 Throwable，
+                // 那个应用直接没端点）。
+                try {
+                    zip.getInputStream(entry).use { input ->
                     // 1.0.4：流式读 dex，不再整文件 readBytes() 进内存。大 dex（微信这类
                     // 几十 MB）整文件读入是闪退的头号嫌疑：读一份几十 MB 的字节数组，
                     // 后面 deepScan 还要再复制一份同样大小的 String，峰值上百 MB，
@@ -51,6 +56,9 @@ object ApkScan {
                         }
                         chunk = next
                     }
+                    }
+                } catch (_: Exception) {
+                    // Keep URLs already extracted from earlier dex entries.
                 }
             }
         }
