@@ -85,18 +85,30 @@ object Axml {
         return Node(strings.getOrNull(nameIndex).orEmpty(), attrs, depth)
     }
 
+    // 1.0.8（同步上游 0.4.2）：畸形 AXML 的边界检查——偏移量、字符串池
+    // 起点、每条字符串入口都先验范围，越界就返回空串/空表，不抛异常。
+    // 以前越界会抛出去，虽然 Scanner 按应用接住了不至于崩整轮，但那个
+    // 应用的 manifest 就读不到了。
     private fun stringPool(bytes: ByteArray, offset: Int): List<String> {
-        if (offset + 28 > bytes.size) return emptyList()
+        if (offset < 0 || offset + 28 > bytes.size) return emptyList()
         val count = u32(bytes, offset + 8)
         val flags = u32(bytes, offset + 16)
-        val stringsStart = offset + u32(bytes, offset + 20)
+        val stringsRelative = u32(bytes, offset + 20)
+        val stringsStart = offset.toLong() + stringsRelative.toLong()
         val utf8 = (flags and 0x100) != 0
         if (count <= 0 || count > 1_000_000) return emptyList()
+        if (stringsStart < offset || stringsStart > bytes.size) return emptyList()
+        if (offset + 28L + count.toLong() * 4L > bytes.size) return emptyList()
 
         val result = ArrayList<String>(count)
         for (i in 0 until count) {
-            val entry = stringsStart + u32(bytes, offset + 28 + i * 4)
-            result.add(if (utf8) readUtf8(bytes, entry) else readUtf16(bytes, entry))
+            val relative = u32(bytes, offset + 28 + i * 4)
+            val entry = stringsStart + relative.toLong()
+            if (entry < 0 || entry > bytes.size) {
+                result.add("")
+                continue
+            }
+            result.add(if (utf8) readUtf8(bytes, entry.toInt()) else readUtf16(bytes, entry.toInt()))
         }
         return result
     }
@@ -137,14 +149,18 @@ object Axml {
         return String(bytes, p, byteLength, Charsets.UTF_16LE)
     }
 
-    private fun u16(bytes: ByteArray, offset: Int): Int =
-        (bytes[offset].toInt() and 0xFF) or ((bytes[offset + 1].toInt() and 0xFF) shl 8)
+    private fun u16(bytes: ByteArray, offset: Int): Int {
+        if (offset < 0 || offset + 2 > bytes.size) return 0
+        return (bytes[offset].toInt() and 0xFF) or ((bytes[offset + 1].toInt() and 0xFF) shl 8)
+    }
 
-    private fun u32(bytes: ByteArray, offset: Int): Int =
-        (bytes[offset].toInt() and 0xFF) or
+    private fun u32(bytes: ByteArray, offset: Int): Int {
+        if (offset < 0 || offset + 4 > bytes.size) return 0
+        return (bytes[offset].toInt() and 0xFF) or
             ((bytes[offset + 1].toInt() and 0xFF) shl 8) or
             ((bytes[offset + 2].toInt() and 0xFF) shl 16) or
             ((bytes[offset + 3].toInt() and 0xFF) shl 24)
+    }
 
     private const val TYPE_STRING = 0x03
     private const val TYPE_INT_DEC = 0x10
