@@ -225,11 +225,14 @@ class MainActivity : AppCompatActivity() {
         sb.append("系统应用：${if (e.isSystem) "是" else "否"}  可调试：${if (e.debuggable) "是" else "否"}  状态：${if (app.disabled) "已停用" else "启用中"}\n")
         if (app.systemProtected) sb.append("受保护：是（系统不让卸载/停用，需 root）\n")
         // 1.0.7：已处置的写清楚——禁了什么、分数扣了多少，只写实际扣到的那项。
+        // 1.0.8：PROJECT_MEDIA 不再叫“禁止录屏”也不扣分——上游 0.4.2 指出
+        // ignore 只撤销常驻授权，拦不住录屏；1.0.7 已处置过的旧记录还显示
+        // 这一项，写的是实际发生的事（常驻授权已撤销），不是“录屏已禁”。
         if (app.entry.appliedOps.isNotEmpty()) {
             val parts = ArrayList<String>()
             if ("PROJECT_MEDIA" in app.entry.appliedOps &&
                 "FOREGROUND_SERVICE_MEDIA_PROJECTION" in e.permissions
-            ) parts.add("禁止录屏（-5分）")
+            ) parts.add("撤销常驻录屏授权")
             if ("GET_USAGE_STATS" in app.entry.appliedOps &&
                 "PACKAGE_USAGE_STATS" in e.permissions
             ) parts.add("禁止读取使用统计（-1分）")
