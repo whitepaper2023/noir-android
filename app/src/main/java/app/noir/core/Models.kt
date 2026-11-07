@@ -32,7 +32,11 @@ data class AppEntry(
     val score: Int,
     val category: Category = Category.OTHER,
     val vendor: String? = null,
-    val sharedUid: String? = null
+    val sharedUid: String? = null,
+    // 1.0.7：已处置过的 appops（PROJECT_MEDIA / GET_USAGE_STATS 的子集）。
+    // 处置只禁掉这两个操作，不改权限/端点，所以分数只扣被禁掉的那部分（见
+    // Rules.remediatedScore），同时 Advisor 不再重复建议同一条。
+    val appliedOps: Set<String> = emptySet()
 ) {
     val uploadEndpoints: List<String> get() = endpoints.filter { Rules.isUpload(it) }
     val commandEndpoints: List<String> get() = endpoints.filter { Rules.isCommand(it) }
