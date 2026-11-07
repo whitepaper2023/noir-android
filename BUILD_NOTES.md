@@ -117,3 +117,17 @@ Lu 说主界面 5 个按钮太丑、底色不要黑色。改版只动界面，�
 - AndroidManifest：MainActivity 加 `configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"`，转屏不再重建 Activity。
 - Scanner.scan：每扫一个应用开头调一次 `ensureActive()`，用户点停能立刻停，不用等整轮跑完（阻塞式 dex 读本身不停顿，取消信号靠这里递进）。
 - 版本：versionCode 7，versionName 1.0.6。签名仍用同一把 release.keystore（别名 clashfirewall）。
+
+## 1.0.7 (2026-11-07，处置过的应用标“已处置”、分数扣减）
+
+需求（Lu 2026-11-07 12:17 反馈）：处置后重扫，需要处置的还是同一批应用——看着像没起作用。要求处置过的有标识、分数也降。
+
+根因：安全处置只把 PROJECT_MEDIA / GET_USAGE_STATS 设为 ignore，不改权限、端点、dex；扫描按这些打分、按这些给建议，所以重扫后同一批应用、同一条建议、同一个分数，一点没变。
+
+修法：
+- 记录：ApplyEngine.applySafe 成功执行一条（exit=0）就把 (pkg, op) 以 "pkg|OP" 记进 prefs（"noir" / "applied_ops"）；恢复时设回非 ignore 的清掉对应条。1.0.7 之前处置过、只留在 applied.txt 里的，第一次扫描时从文件里并进来（只认 `ok (0)` 的行，合并不是覆盖，恢复后清空过的也不会被重新种回来）。applied.txt 每次处置会被重写，prefs 才是 durable 的记录。
+- 标识：Scanner 读 prefs，AppEntry 新增 appliedOps 字段；列表行追加“ · 已处置”（和“ · 受保护”同款），详情弹窗写“已处置：禁止录屏（-5分）、禁止读取使用统计（-1分）”，汇总行加“已处置 N 个应用”。
+- 扣分：Rules.remediatedScore——只扣被禁掉的那部分，不虚构降幅。PROJECT_MEDIA 被禁扣 5（权限本身 1 + 录屏加权 4），GET_USAGE_STATS 被禁扣 1（该权限在总数里只占 1），下限 0。权限、端点、dex 都还在，所以大应用分数不会一下掉出高风险，标识才是主要信号。分数一律从 Rules.score 原始分重算再扣，禁止在已扣过的分数上叠加（扫描里和处置/恢复后就地刷新里都是同一口径）。
+- 不再重复建议：Advisor.advise 跳过已处置的那条 autoSafe 建议（REVIEW、BLOCK_DNS 不受影响），重扫后“安全处置 N 条”会跟着降。
+- 就地刷新：处置完、恢复完立刻改列表（标记、分数、建议、汇总），不用重扫；Activity 重建后从 ScanManager 取到的也是最新列表。
+- 版本：versionCode 8，versionName 1.0.7。签名仍用同一把 release.keystore（别名 clashfirewall）。
