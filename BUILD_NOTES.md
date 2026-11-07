@@ -131,3 +131,34 @@ Lu 说主界面 5 个按钮太丑、底色不要黑色。改版只动界面，�
 - 不再重复建议：Advisor.advise 跳过已处置的那条 autoSafe 建议（REVIEW、BLOCK_DNS 不受影响），重扫后“安全处置 N 条”会跟着降。
 - 就地刷新：处置完、恢复完立刻改列表（标记、分数、建议、汇总），不用重扫；Activity 重建后从 ScanManager 取到的也是最新列表。
 - 版本：versionCode 8，versionName 1.0.7。签名仍用同一把 release.keystore（别名 clashfirewall）。
+
+## 1.0.8 (2026-11-08，同步上游 NOIR 0.4.2）
+
+上游 0.4.2 是安全修正版，标题写明 0.4.1 之前都要升。逐文件 diff 了咱们移植的 11 个核心文件（本地 vs 上游 main HEAD），同步了其中有实质影响的改动。
+
+### 最要紧的修正：PROJECT_MEDIA 不是“禁止录屏”
+上游 commit 56246fda 删掉了录屏自动建议：PROJECT_MEDIA 这个 app-op 只控制常驻授权，设成 ignore 拦不住录屏。咱们 1.0.7 写的是“禁止录屏（-5分）”，说法是错的。1.0.8 改法：
+- Advisor.advise 不再产生 PROJECT_MEDIA 自动建议（MEDIA_KEEP 白名单和 mediaWorthFlagging 整段删掉）；ActionType 标签按上游改名“撤销常驻录屏授权”。
+- Rules.remediatedScore 删掉 -5 扣分（录屏能力还在，分数不该扣）；GET_USAGE_STATS 的 -1 保留（上游保留了这条建议，读使用统计是真被禁掉了）。
+- 详情弹窗里 1.0.7 已处置过的旧记录还显示这一项，写“撤销常驻录屏授权”，不带 -5；那是实际发生的事（常驻授权已撤销），不是“录屏已禁”。
+- ApplyEngine.commandFor/opFor 的 PROJECT_MEDIA 分支留着（旧的回滚/恢复和 1.0.7 迁移还要认它），不再有新建议会走到这里。
+
+### 扫描准确性（同步上游 0.4.2）
+- Rules：SENSITIVE 加粗定位、读电话号码、身体传感器、读外部存储、读音频；上报/指令路径词扩了（/stats、/logs、/tracking、/analytics、/metrics、/crash 等以前漏了）；isUpload/isCommand 只看 URL 路径，查询参数里的上报词不再算数（误报）。
+- Domains：追踪标签优先于通用功能标签；"report"/"analytics" 从前缀匹配改成子串匹配（BLOCK_CONTAINS）；只有 stat / stats / statistic* 才算追踪器，static、station、status 不算（以前 startsWith("stat") 会误伤）。
+- Trackers.fromEndpoints：按 host 匹配，不再拿整条 URL 子串去搜（token 出现在路径里也会误算）。
+- Manifest：组件加 enabled（enabled=false 不算对外暴露）；应用级 permission 继承到组件；provider 的 read/writePermission 也算数；allowBackup 缺了默认 true（Android 默认值，不是未知）；cleartext 按 targetSdk<28 判；manifest 超 8MB 直接跳过。
+- Axml：畸形 AXML 的边界检查（偏移量、字符串池起点、每条字符串入口、u16/u32 越界保护），越界返回空串/空表，不抛异常。
+- Exposure：hostOf 去 userinfo、问号、# 号、IPv6 方括号；READ_PHONE_NUMBERS→设备标识、READ_MEDIA_AUDIO→文件/相册。
+- Advisor BLOCK_DNS：按不同上报 host 数，不按端点数。
+- Report：JSON 加 leaksByType 稳定键；Markdown 表格值转义（md()）；HTML 汇总按不同上报 host 数；风险徽章样式显式映射（以前 lowercase() 在个别 locale 下会丢样式）。
+- ApkScan：单条 dex 读坏了只跳过这一条，前面 dex 已扫到的 URL 留着；1.0.4 的流式读法保留（上游还是整文件 readBytes，没采纳流式读）。
+- ApplyEngine.applySafe：回滚行只在执行成功后才写进 rollback.txt（以前执行前就写，失败的命令也会留一条没执行过的回滚行）。
+
+### 刻意没同步的
+- i18n/Lang 英文界面：咱们只要中文，不接 Lang 参数。
+- 上游 CLI 的东西：--apply/--yes/--purge 参数解析、jadx、端点缓存、工具下载校验、TUI：手机上没有。
+- 分包 APK 与 classes16.dex+：咱们本来就处理（Scanner 读 sourceDir + splitSourceDirs；ApkScan 按 classes* 前缀扫全部 dex）。
+- Manifest catch：上游从 Throwable 收窄到 Exception；咱们保持 Throwable（设备上畸形文件抛 Error 也不该拖垮扫描）。
+- Rollback 不写设备序列号：上游 rollback 带序列号；咱们是单设备用，恢复只在本机跑，没加。
+- 版本：versionCode 9，versionName 1.0.8。签名仍用同一把 release.keystore（别名 clashfirewall）。
