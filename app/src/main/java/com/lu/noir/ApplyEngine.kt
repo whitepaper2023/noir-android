@@ -17,6 +17,65 @@ object ApplyEngine {
     // 绝不碰这些包：系统本身、NOIR 自己、Shizuku。
     private val PROTECTED = setOf("android", "com.lu.noir", "moe.shizuku.manager")
 
+    // 1.0.7：处置过的 (pkg, op) 记在 prefs 里，格式 "pkg|OP"。
+    // 扫描时读它来打“已处置”标、扣分、Advisor 跳过重复建议；恢复时清掉对应条。
+    // prefs 才是 durable 的记录——applied.txt 每次处置都会被重写（旧行为），
+    // 不能靠它当唯一记录。
+    private const val PREFS = "noir"
+    private const val KEY_APPLIED_OPS = "applied_ops"
+    private const val KEY_APPLIED_MIGRATED = "applied_ops_migrated"
+
+    /** pkg -> 已处置的 op 集合。第一次调用时把 1.0.7 之前写进 applied.txt 的记录并进来。 */
+    fun appliedOps(context: Context): Map<String, Set<String>> {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (!prefs.getBoolean(KEY_APPLIED_MIGRATED, false)) {
+            // 合并而不是覆盖：recordApplied 可能已经先写了新条目，不能丢。
+            val existing = prefs.getStringSet(KEY_APPLIED_OPS, emptySet()).orEmpty()
+            val merged = existing + migrateAppliedFromFile(context)
+            prefs.edit()
+                .putStringSet(KEY_APPLIED_OPS, merged)
+                .putBoolean(KEY_APPLIED_MIGRATED, true)
+                .apply()
+        }
+        val raw = prefs.getStringSet(KEY_APPLIED_OPS, emptySet()).orEmpty()
+        val out = HashMap<String, MutableSet<String>>()
+        raw.forEach { entry ->
+            val parts = entry.split("|")
+            if (parts.size == 2) out.getOrPut(parts[0]) { mutableSetOf() }.add(parts[1])
+        }
+        return out
+    }
+
+    fun recordApplied(context: Context, pkg: String, op: String) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val set = prefs.getStringSet(KEY_APPLIED_OPS, emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (set.add("$pkg|$op")) prefs.edit().putStringSet(KEY_APPLIED_OPS, set).apply()
+    }
+
+    fun clearApplied(context: Context, pkg: String, op: String) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val set = prefs.getStringSet(KEY_APPLIED_OPS, emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (set.remove("$pkg|$op")) prefs.edit().putStringSet(KEY_APPLIED_OPS, set).apply()
+    }
+
+    /**
+     * 1.0.7 迁移：1.0.7 之前处置过的、只留在 applied.txt 里的记录，从文件里
+     * 补回 prefs。applied.txt 每行形如
+     * `cmd appops set --user 0 <pkg> <op> ignore\tok (0)`，只认 ok 的行。
+     */
+    private fun migrateAppliedFromFile(context: Context): Set<String> {
+        return try {
+            val file = File(outDir(context), "applied.txt")
+            if (!file.exists()) return emptySet()
+            Regex("""cmd appops set --user 0 (\S+) (\S+) ignore\s+ok \(0\)""")
+                .findAll(file.readText())
+                .map { "${it.groupValues[1]}|${it.groupValues[2]}" }
+                .toSet()
+        } catch (_: Throwable) {
+            emptySet()
+        }
+    }
+
     fun outDir(context: Context): File {
         val dir = File(context.getExternalFilesDir(null), "noir-out")
         if (!dir.exists()) dir.mkdirs()
@@ -109,9 +168,12 @@ object ApplyEngine {
 
         val appliedLines = ArrayList<String>()
         for ((rec, pair) in planned) {
-            val (cmd, _) = pair
+            val (cmd, op) = pair
             val result = ShizukuShell.runCommand(context, cmd)
             results.add(AppliedAction(cmd, result.exitCode, result.stdout, result.stderr))
+            // 1.0.7：成功的才记进 prefs——扫描靠它打“已处置”标、扣分、
+            // 跳过重复建议；失败的不记，重扫还会继续建议。
+            if (result.exitCode == 0) recordApplied(context, rec.pkg, op)
             appliedLines.add(
                 "$cmd\t${if (result.exitCode == 0) "ok" else "fail"} (${result.exitCode})\n" +
                     "stdout: ${result.stdout}\nstderr: ${result.stderr}\n"
