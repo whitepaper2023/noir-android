@@ -41,6 +41,9 @@ object Report {
             sb.append("      \"sharedUid\": ").append(a.sharedUid?.let { "\"${esc(it)}\"" } ?: "null").append(",\n")
             sb.append("      \"dataTypes\": ").append(array(a.dataTypes.map { it.label })).append(",\n")
             sb.append("      \"leaks\": ").append(leaksJson(a)).append(",\n")
+            // 1.0.8（同步上游 0.4.2）：稳定键版本；`leaks` 的键是中文标签，
+            // 机器读用 leaksByType 的枚举名。
+            sb.append("      \"leaksByType\": ").append(leaksByTypeJson(a)).append(",\n")
             sb.append("      \"score\": ").append(a.score).append(",\n")
             sb.append("      \"permissions\": ").append(array(a.permissions)).append(",\n")
             sb.append("      \"endpoints\": ").append(array(a.endpoints)).append("\n")
@@ -86,8 +89,8 @@ object Report {
         apps.forEach { a ->
             sb.append("| ").append(a.score)
                 .append(" | `").append(a.pkg).append("`")
-                .append(" | ").append(a.category.label)
-                .append(" | ").append(a.vendor ?: "—")
+                .append(" | ").append(md(a.category.label))
+                .append(" | ").append(md(a.vendor ?: "—"))
                 .append(" | ").append(if (a.isSystem) "yes" else "no")
                 .append(" | ").append(a.permissions.size)
                 .append(" | ").append(a.uploadEndpoints.size)
@@ -101,9 +104,9 @@ object Report {
             sb.append("|:---:|---|---|---|\n")
             recommendations.forEach { r ->
                 sb.append("| ").append(r.risk)
-                    .append(" | ").append(r.action.label)
+                    .append(" | ").append(md(r.action.label))
                     .append(" | `").append(r.pkg).append("`")
-                    .append(" | ").append(r.reason)
+                    .append(" | ").append(md(r.reason))
                     .append(" |\n")
             }
         }
@@ -170,7 +173,8 @@ object Report {
             .filterValues { it.size > 1 }
             .toList()
             .sortedByDescending { it.second.size }
-        val uploadHosts = apps.flatMap { it.uploadEndpoints }.distinct().size
+        // 1.0.8（同步上游 0.4.2）：按不同上报 host 数，不按端点数。
+        val uploadHosts = apps.flatMap { Exposure.uploadHosts(it) }.distinct().size
         val deviceLabel = device.model.ifBlank { device.serial }
         val sb = StringBuilder()
 
@@ -282,7 +286,15 @@ footer{border-top:1px solid var(--line);margin-top:24px;padding-top:18px;color:v
     <tbody>
 """)
             recommendations.forEach { rec ->
-                val cls = rec.risk.lowercase()
+                // 1.0.8（同步上游 0.4.2）：risk 是大写的 HIGH/MED/LOW，
+                // 以前 lowercase() 在极少数 locale 下会转出非 ASCII，
+                // 徽章样式就丢了；现在显式映射。
+                val cls = when (rec.risk.uppercase()) {
+                    "HIGH" -> "high"
+                    "MED" -> "med"
+                    "LOW" -> "low"
+                    else -> "low"
+                }
                 sb.append("""      <tr><td><span class="badge $cls">${h(rec.risk)}</span>${if (rec.autoSafe) """ <span class="badge auto">auto</span>""" else ""}</td><td>${h(rec.action.label)}</td><td><span class="mono">${h(rec.pkg)}</span></td><td>${h(rec.reason)}</td></tr>
 """)
             }
@@ -418,6 +430,19 @@ footer{border-top:1px solid var(--line);margin-top:24px;padding-top:18px;color:v
             "\"${esc(data.label)}\":" + array(hosts)
         }
     }
+
+    /** Stable-key variant; `leaks` remains for human-facing compatibility. */
+    private fun leaksByTypeJson(app: AppEntry): String {
+        if (app.leaks.isEmpty()) return "{}"
+        return app.leaks.entries.joinToString(prefix = "{", postfix = "}") { (data, hosts) ->
+            "\"${data.name}\":" + array(hosts)
+        }
+    }
+
+    // 1.0.8（同步上游 0.4.2）：Markdown 表格里的值含 | 或换行会把表格
+    // 撑坏，先转义掉。
+    private fun md(value: String): String =
+        value.replace("|", "\\|").replace("\r", " ").replace("\n", " ")
 
     private fun array(items: List<String>): String =
         items.joinToString(prefix = "[", postfix = "]") { "\"${esc(it)}\"" }
