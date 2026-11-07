@@ -78,7 +78,12 @@ object Advisor {
                             app.uploadEndpoints.isNotEmpty()
                         )
 
-            if (mediaWorthFlagging) {
+            // 1.0.7：已经处置过的操作不再重复建议——重扫后“需要处置”的还是
+            // 同一批，是 Lu 2026-11-07 反馈的问题。处置过的 (pkg, op) 记在
+            // prefs 的 applied_ops 里（ApplyEngine.recordApplied），扫描时
+            // 经 AppEntry.appliedOps 带进来；这里只跳过已处置的那条，别的
+            // 建议（REVIEW、BLOCK_DNS）不受影响。
+            if (mediaWorthFlagging && "PROJECT_MEDIA" !in app.appliedOps) {
                 out += Recommendation(
                     app.pkg,
                     ActionType.APPOP_PROJECT_MEDIA,
@@ -90,7 +95,8 @@ object Advisor {
 
             if ("PACKAGE_USAGE_STATS" in app.permissions &&
                 app.category == Category.TELEMETRY &&
-                app.isSystem
+                app.isSystem &&
+                "GET_USAGE_STATS" !in app.appliedOps
             ) {
                 out += Recommendation(
                     app.pkg,
