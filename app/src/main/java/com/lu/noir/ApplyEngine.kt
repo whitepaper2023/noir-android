@@ -101,9 +101,11 @@ object ApplyEngine {
     }
 
     /**
-     * 执行安全处置。执行前先逐条查当前模式并写入 rollback.txt（追加，
-     * 不覆盖已有回滚行；同一 (pkg, op) 只保留最早那条），
-     * 成功执行的动作才进 applied.txt；失败的也如实记录 stderr。
+     * 执行安全处置。先逐条查当前模式记在内存里，执行完只把成功的写进
+     * rollback.txt（追加，不覆盖已有回滚行；同一 (pkg, op) 只保留最早
+     * 那条）。1.0.8（同步上游 0.4.2）：以前是执行前就写回滚，命令失败了
+     * 也会留一条没执行过的回滚行；现在失败的不写，恢复时不再出现没
+     * 动过的操作。成功执行的动作才进 applied.txt；失败的也如实记录 stderr。
      */
     suspend fun applySafe(
         context: Context,
@@ -133,7 +135,11 @@ object ApplyEngine {
                 rec to (cmd to op)
             }
 
-        // 先查原模式，写回滚
+        // 先查原模式，记在内存里，不写文件——只把执行成功的回滚行写进去
+        //（1.0.8，见函数注释）。同一 (pkg, op) 只保留最早那条：最早那条
+        // 恢复的是最初状态，第二遍查到的“原模式”已是第一遍改完的状态，
+        // 再写一条反而会把恢复目标写错。
+        val pendingRollback = HashMap<Pair<String, String>, List<String>>()
         for ((rec, pair) in planned) {
             val (cmd, op) = pair
             val get = ShizukuShell.runCommand(
@@ -142,16 +148,30 @@ object ApplyEngine {
             )
             val prev = parseAppOpsMode(get.stdout)
             if ((rec.pkg to op) !in coveredOps) {
-                rollbackLines.add(
-                    "# ${rec.pkg} $op was: $prev (get exit=${get.exitCode})"
-                )
-                rollbackLines.add(
-                    "cmd appops set --user 0 ${rec.pkg} $op $prev"
-                )
-                rollbackLines.add(
+                pendingRollback[rec.pkg to op] = listOf(
+                    "# ${rec.pkg} $op was: $prev (get exit=${get.exitCode})",
+                    "cmd appops set --user 0 ${rec.pkg} $op $prev",
                     "# apply: $cmd"
                 )
             }
+        }
+
+        val appliedLines = ArrayList<String>()
+        for ((rec, pair) in planned) {
+            val (cmd, op) = pair
+            val result = ShizukuShell.runCommand(context, cmd)
+            results.add(AppliedAction(cmd, result.exitCode, result.stdout, result.stderr))
+            // 1.0.7：成功的才记进 prefs——扫描靠它打“已处置”标、扣分、
+            // 跳过重复建议；失败的不记，重扫还会继续建议。
+            // 1.0.8：成功的回滚行也在这里才进 rollback.txt（见函数注释）。
+            if (result.exitCode == 0) {
+                recordApplied(context, rec.pkg, op)
+                pendingRollback[rec.pkg to op]?.let { rollbackLines.addAll(it) }
+            }
+            appliedLines.add(
+                "$cmd\t${if (result.exitCode == 0) "ok" else "fail"} (${result.exitCode})\n" +
+                    "stdout: ${result.stdout}\nstderr: ${result.stderr}\n"
+            )
         }
         // 1.0.4：rollback.txt 改追加，不再覆盖。卸载/停用本来就是追加的，
         // 只有这里是覆盖——跑一次安全处置就会把之前卸载/停用的恢复命令冲掉。
@@ -166,19 +186,6 @@ object ApplyEngine {
             rollback.writeText("# no appops changes were applied\n")
         }
 
-        val appliedLines = ArrayList<String>()
-        for ((rec, pair) in planned) {
-            val (cmd, op) = pair
-            val result = ShizukuShell.runCommand(context, cmd)
-            results.add(AppliedAction(cmd, result.exitCode, result.stdout, result.stderr))
-            // 1.0.7：成功的才记进 prefs——扫描靠它打“已处置”标、扣分、
-            // 跳过重复建议；失败的不记，重扫还会继续建议。
-            if (result.exitCode == 0) recordApplied(context, rec.pkg, op)
-            appliedLines.add(
-                "$cmd\t${if (result.exitCode == 0) "ok" else "fail"} (${result.exitCode})\n" +
-                    "stdout: ${result.stdout}\nstderr: ${result.stderr}\n"
-            )
-        }
         applied.writeText(
             if (appliedLines.isEmpty()) "# no appops changes were applied\n"
             else appliedLines.joinToString("\n")
