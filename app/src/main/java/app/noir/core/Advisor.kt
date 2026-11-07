@@ -6,7 +6,10 @@
 package app.noir.core
 
 enum class ActionType(val label: String) {
-    APPOP_PROJECT_MEDIA("禁止录屏"),
+    // 1.0.8（同步上游 0.4.2）：PROJECT_MEDIA 只撤销常驻授权，拦不住录屏，
+    // 上游已把它从 advise() 的自动建议里删掉；枚举保留，旧的回滚/恢复
+    // 和 1.0.7 已处置的记录还要认它。标签按上游改名，不再叫“禁止录屏”。
+    APPOP_PROJECT_MEDIA("撤销常驻录屏授权"),
     APPOP_USAGE_STATS("禁止读取使用统计"),
     UNINSTALL_USER("对当前用户卸载"),
     REVIEW("人工复核"),
@@ -24,9 +27,11 @@ data class Recommendation(
 /**
  * Turns findings into a small, ordered set of actions.
  *
- * Two deliberate restraints:
- *  - screen-capture is only flagged on system components that also ship upload
- *    endpoints, never on apps where screen sharing is a real feature;
+ * Deliberate restraints:
+ *  - declaring screen-capture capability is not treated as an action: the
+ *    PROJECT_MEDIA app-op only controls a permanent grant, not recording
+ *    itself (1.0.8 同步上游 0.4.2，56246fda：删掉了录屏自动建议；
+ *    之前“禁止录屏”的说法是错的，ignore 拦不住录屏）;
  *  - NOIR never proposes uninstalling a user app. Those become REVIEW, because
  *    "WeChat uploads a lot" is not a reason to uninstall WeChat.
  */
@@ -45,54 +50,14 @@ object Advisor {
         "com.android.incallui"
     )
 
-    /** Apps where screen capture is a legitimate, user-facing feature. */
-    private val MEDIA_KEEP = setOf(
-        "com.miui.screenrecorder",
-        "com.milink.service",
-        "com.miui.carlink",
-        "com.miui.accessibility",
-        "com.xiaomi.mirror",
-        "com.android.chrome",
-        "com.google.android.youtube",
-        "com.tencent.mm",
-        "com.tencent.mobileqq",
-        "com.eg.android.AlipayGphone",
-        "tv.danmaku.bili",
-        "com.verlintas.baic2",
-        "com.verlintas.baic2.devtest",
-        "bin.mt.plus"
-    )
-
     fun advise(apps: List<AppEntry>): List<Recommendation> {
         val out = ArrayList<Recommendation>()
 
         apps.forEach { app ->
             if (app.pkg == "android") return@forEach
 
-            val mediaWorthFlagging =
-                "FOREGROUND_SERVICE_MEDIA_PROJECTION" in app.permissions &&
-                    app.pkg !in MEDIA_KEEP &&
-                    app.isSystem &&
-                    (
-                        app.category in setOf(Category.SECURITY, Category.AI_VOICE, Category.TELEMETRY) ||
-                            app.uploadEndpoints.isNotEmpty()
-                        )
-
-            // 1.0.7：已经处置过的操作不再重复建议——重扫后“需要处置”的还是
-            // 同一批，是 Lu 2026-11-07 反馈的问题。处置过的 (pkg, op) 记在
-            // prefs 的 applied_ops 里（ApplyEngine.recordApplied），扫描时
-            // 经 AppEntry.appliedOps 带进来；这里只跳过已处置的那条，别的
-            // 建议（REVIEW、BLOCK_DNS）不受影响。
-            if (mediaWorthFlagging && "PROJECT_MEDIA" !in app.appliedOps) {
-                out += Recommendation(
-                    app.pkg,
-                    ActionType.APPOP_PROJECT_MEDIA,
-                    "MED",
-                    "系统组件，声明了录屏能力且存在上报端点",
-                    autoSafe = true
-                )
-            }
-
+            // 1.0.8：录屏自动建议已删（见文件头注释）。GET_USAGE_STATS 的
+            // “已处置跳过”保留（1.0.7 的机制，上游保留了这条建议）。
             if ("PACKAGE_USAGE_STATS" in app.permissions &&
                 app.category == Category.TELEMETRY &&
                 app.isSystem &&
@@ -117,7 +82,9 @@ object Advisor {
                 )
             }
 
-            if (app.uploadEndpoints.size >= 2 &&
+            // 1.0.8（同步上游 0.4.2）：按不同上报 host 数，不按端点数——
+            // 同一个 host 上两个端点只算 1 个。
+            if (Exposure.uploadHosts(app).size >= 2 &&
                 app.category in setOf(Category.TELEMETRY, Category.LOCATION, Category.ADS)
             ) {
                 out += Recommendation(
