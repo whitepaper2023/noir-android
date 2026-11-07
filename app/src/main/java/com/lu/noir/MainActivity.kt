@@ -18,6 +18,8 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import app.noir.core.Advisor
+import app.noir.core.Rules
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -160,13 +162,47 @@ class MainActivity : AppCompatActivity() {
         lastResult = result
         allApps = result.apps
         applyFilter("")
-        val high = result.apps.count { it.entry.score >= 40 }
-        val med = result.apps.count { it.entry.score in 25..39 }
-        summaryText.text = "共 ${result.apps.size} 个应用，高风险 $high 个，中风险 $med 个，" +
-            "安全处置 ${result.recommendations.count { it.autoSafe }} 条，" +
-            "上报域名 ${result.domains.trackers.size} 个可拦截"
+        renderSummary(result)
         statusText.text = "扫描完成。点应用看详情；没装 Shizuku 也能扫和导出，" +
             "处置要 Shizuku。\n" + ShizukuShell.status(this@MainActivity)
+    }
+
+    private fun renderSummary(result: ScanResult) {
+        val high = result.apps.count { it.entry.score >= 40 }
+        val med = result.apps.count { it.entry.score in 25..39 }
+        val remed = result.apps.count { it.entry.appliedOps.isNotEmpty() }
+        summaryText.text = "共 ${result.apps.size} 个应用，高风险 $high 个，中风险 $med 个，" +
+            "安全处置 ${result.recommendations.count { it.autoSafe }} 条，" +
+            "上报域名 ${result.domains.trackers.size} 个可拦截" +
+            "，已处置 $remed 个应用"
+    }
+
+    // 1.0.7：处置、恢复后就地刷新已处置标记/分数/建议，不用重扫。
+    // 调用方先改 prefs（ApplyEngine.recordApplied/clearApplied），这里只改
+    // 内存里的列表。分数一律从 Rules.score 原始分重算再扣，禁止在已扣过
+    // 的分数上叠加；建议用 Advisor 重算一遍，已处置的那条就不再出现。
+    private fun refreshAppliedMarks(changed: Map<String, Set<String>>, add: Boolean) {
+        if (changed.isEmpty()) return
+        allApps = allApps.map { app ->
+            val ops = changed[app.entry.pkg] ?: return@map app
+            val updated = if (add) app.entry.appliedOps + ops else app.entry.appliedOps - ops
+            val base = Rules.score(
+                app.entry.permissions, app.entry.endpoints,
+                app.entry.isSystem, app.entry.debuggable
+            )
+            app.copy(
+                entry = app.entry.copy(
+                    appliedOps = updated,
+                    score = Rules.remediatedScore(base, app.entry.permissions, updated)
+                )
+            )
+        }
+        val entries = allApps.map { it.entry }
+        lastResult = lastResult?.copy(apps = allApps, recommendations = Advisor.advise(entries))
+        ScanManager.setLastResult(lastResult)
+        lastResult?.let { renderSummary(it) }
+        val query = findViewById<EditText>(R.id.searchBox).text.toString()
+        applyFilter(query)
     }
 
     private fun applyFilter(query: String) {
@@ -188,6 +224,17 @@ class MainActivity : AppCompatActivity() {
         sb.append("分数：${e.score}  分类：${e.category.label}  厂商：${e.vendor ?: "—"}\n")
         sb.append("系统应用：${if (e.isSystem) "是" else "否"}  可调试：${if (e.debuggable) "是" else "否"}  状态：${if (app.disabled) "已停用" else "启用中"}\n")
         if (app.systemProtected) sb.append("受保护：是（系统不让卸载/停用，需 root）\n")
+        // 1.0.7：已处置的写清楚——禁了什么、分数扣了多少，只写实际扣到的那项。
+        if (app.entry.appliedOps.isNotEmpty()) {
+            val parts = ArrayList<String>()
+            if ("PROJECT_MEDIA" in app.entry.appliedOps &&
+                "FOREGROUND_SERVICE_MEDIA_PROJECTION" in e.permissions
+            ) parts.add("禁止录屏（-5分）")
+            if ("GET_USAGE_STATS" in app.entry.appliedOps &&
+                "PACKAGE_USAGE_STATS" in e.permissions
+            ) parts.add("禁止读取使用统计（-1分）")
+            if (parts.isNotEmpty()) sb.append("已处置：${parts.joinToString("、")}\n")
+        }
         sb.append("UID：${e.uid}  共享 UID：${e.sharedUid ?: "—"}  安装来源：${e.installer ?: "—"}\n\n")
         sb.append("可读数据：${e.dataTypes.joinToString("、") { it.label }.ifEmpty { "无" }}\n\n")
         sb.append("权限（${e.permissions.size}）：\n${e.permissions.joinToString("\n")}\n\n")
@@ -360,8 +407,10 @@ class MainActivity : AppCompatActivity() {
                         applyFilter(query)
                         val high = allApps.count { it.entry.score >= 40 }
                         val med = allApps.count { it.entry.score in 25..39 }
+                        val remed = allApps.count { it.entry.appliedOps.isNotEmpty() }
                         summaryText.text =
-                            "共 ${allApps.size} 个应用，高风险 $high 个，中风险 $med 个（刚卸载 $pkg，列表已更新）"
+                            "共 ${allApps.size} 个应用，高风险 $high 个，中风险 $med 个（刚卸载 $pkg，列表已更新）" +
+                            "，已处置 $remed 个应用"
                         statusText.text = "已卸载 $pkg。"
                     } else {
                         statusText.text = "卸载未完成：$pkg 仍在列表里，详见结果弹窗。"
@@ -543,6 +592,16 @@ class MainActivity : AppCompatActivity() {
                         ApplyEngine.applySafe(this@MainActivity, safe)
                     }
                     val done = applied.count { it.exitCode == 0 }
+                    // 1.0.7：处置完就地打标、扣分、去掉已处置的建议，不用重扫。
+                    // 命令形如 `cmd appops set --user 0 <pkg> <op> ignore`。
+                    val newlyApplied = applied.filter { it.exitCode == 0 }
+                        .mapNotNull { action ->
+                            Regex("""cmd appops set --user 0 (\S+) (\S+) ignore""")
+                                .find(action.command)
+                                ?.let { it.groupValues[1] to it.groupValues[2] }
+                        }.groupBy({ it.first }, { it.second })
+                        .mapValues { it.value.toSet() }
+                    refreshAppliedMarks(newlyApplied, add = true)
                     AlertDialog.Builder(this@MainActivity)
                         .setTitle("处置完成：$done/${applied.size} 成功")
                         .setMessage(
@@ -634,6 +693,24 @@ class MainActivity : AppCompatActivity() {
                         val query = findViewById<EditText>(R.id.searchBox).text.toString()
                         applyFilter(query)
                     }
+                    // 1.0.7：恢复里 appops 设回非 ignore 的，处置标记也清掉，
+                    // 重扫不再标“已处置”；设回 ignore 的不算恢复成功、不清。
+                    // 恢复命令形如 `cmd appops set --user 0 <pkg> <op> <原模式>`。
+                    val restoredOps = results.filter { it.second == 0 }
+                        .mapNotNull { (cmd, _, _) ->
+                            Regex("""cmd appops set --user 0 (\S+) (\S+) (\S+)""")
+                                .find(cmd)?.let { m ->
+                                    Triple(m.groupValues[1], m.groupValues[2], m.groupValues[3])
+                                }
+                        }.filter { it.third != "ignore" }
+                    if (restoredOps.isNotEmpty()) {
+                        restoredOps.forEach { (pkg, op, _) ->
+                            ApplyEngine.clearApplied(this@MainActivity, pkg, op)
+                        }
+                        val clearedByPkg = restoredOps.groupBy({ it.first }, { it.second })
+                            .mapValues { it.value.toSet() }
+                        refreshAppliedMarks(clearedByPkg, add = false)
+                    }
                     statusText.text = "恢复完成：$done/${results.size} 成功。建议重新扫描一次刷新列表。"
                     AlertDialog.Builder(this@MainActivity)
                         .setTitle("恢复完成：$done/${results.size} 成功")
@@ -696,7 +773,8 @@ class MainActivity : AppCompatActivity() {
             holder.meta.text = "${e.category.label} · ${e.vendor ?: "—"} · " +
                 "${if (e.isSystem) "系统" else "用户"} · 权限 ${e.permissions.size} · 上报 ${e.uploadEndpoints.size}" +
                 if (app.disabled) " · 已停用" else "" +
-                if (app.systemProtected) " · 受保护" else ""
+                if (app.systemProtected) " · 受保护" else "" +
+                if (e.appliedOps.isNotEmpty()) " · 已处置" else ""
             holder.score.text = "风险分：${e.score}" +
                 if (e.score >= 40) "（高）" else if (e.score >= 25) "（中）" else "（低）"
             // 1.0.5：分数按风险着色，高红、中橙、低绿，一眼能分出来。
